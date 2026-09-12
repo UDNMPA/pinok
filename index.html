@@ -1,0 +1,2731 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>ПИНОК.IO</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;700;800&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+  // Fallback: if the primary CDN failed (network hiccup, blocker, etc.),
+  // load THREE from a second CDN before the game script runs.
+  if(typeof THREE === 'undefined'){
+    document.write('<script src="https://unpkg.com/three@0.128.0/build/three.min.js"><\/script>');
+  }
+</script>
+<script>
+  window.addEventListener('DOMContentLoaded', function(){
+    if(typeof THREE === 'undefined'){
+      var msg = document.createElement('div');
+      msg.style.cssText = 'position:fixed;inset:0;background:#1a1b2e;color:#fff;display:flex;align-items:center;justify-content:center;text-align:center;padding:24px;font-family:sans-serif;z-index:9999;font-size:16px;';
+      msg.textContent = 'Не удалось загрузить графический движок (three.js). Проверьте подключение к интернету и обновите страницу.';
+      document.body.appendChild(msg);
+    }
+  });
+</script>
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script>
+  if(typeof Peer === 'undefined'){
+    document.write('<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"><\/script>');
+  }
+</script>
+<style>
+  :root{
+    --coral:#FF5D5D;
+    --coral-dark:#E23F3F;
+    --violet:#7C5CFF;
+    --violet-dark:#5F3FE0;
+    --yellow:#FFC93C;
+    --yellow-dark:#E0A81A;
+    --ink:#1A1B2E;
+    --ink-2:#242640;
+    --mint:#3DDC97;
+    --paper:#F5F5FF;
+  }
+  *{ box-sizing:border-box; -webkit-tap-highlight-color:transparent; user-select:none; -webkit-user-select:none; touch-action:none; }
+  html,body{
+    margin:0; padding:0; width:100%; height:100%;
+    background:var(--ink);
+    font-family:'Baloo 2', sans-serif;
+    overflow:hidden;
+    overscroll-behavior:none;
+  }
+  #app{ position:fixed; inset:0; width:100%; height:100%; }
+  canvas#gameCanvas{ position:absolute; inset:0; display:block; width:100%; height:100%; }
+
+  /* ---------- START SCREEN ---------- */
+  #startScreen{
+    position:fixed; inset:0; z-index:50;
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    background:
+      radial-gradient(circle at 30% 20%, rgba(124,92,255,0.35), transparent 55%),
+      radial-gradient(circle at 75% 80%, rgba(255,93,93,0.35), transparent 55%),
+      var(--ink);
+    gap:28px;
+    padding:20px;
+    text-align:center;
+  }
+  #startScreen .logo{
+    font-weight:800;
+    font-size:clamp(42px, 12vw, 84px);
+    color:var(--paper);
+    letter-spacing:1px;
+    line-height:0.95;
+    text-shadow: 0 6px 0 var(--coral-dark), 0 10px 18px rgba(0,0,0,0.4);
+    transform: rotate(-2deg);
+  }
+  #startScreen .logo span{ color:var(--yellow); }
+  #startScreen .sub{
+    font-weight:700;
+    font-size:clamp(14px,4vw,18px);
+    color:rgba(245,245,255,0.65);
+    max-width:320px;
+  }
+  #tapButton{
+    margin-top:10px;
+    font-family:'Baloo 2', sans-serif;
+    font-weight:800;
+    font-size:clamp(20px, 5.5vw, 28px);
+    color:var(--ink);
+    background:var(--yellow);
+    border:none;
+    border-radius:26px;
+    padding:22px 48px;
+    box-shadow: 0 8px 0 var(--yellow-dark), 0 14px 24px rgba(0,0,0,0.35);
+    cursor:pointer;
+    transition: transform 0.08s ease, box-shadow 0.08s ease;
+    animation: floaty 1.8s ease-in-out infinite;
+  }
+  #tapButton:active{
+    transform: translateY(6px);
+    box-shadow: 0 2px 0 var(--yellow-dark), 0 6px 14px rgba(0,0,0,0.3);
+  }
+  @keyframes floaty{
+    0%,100%{ transform:translateY(0); }
+    50%{ transform:translateY(-8px); }
+  }
+  #startScreen .hint{
+    color:rgba(245,245,255,0.4);
+    font-size:13px;
+    font-weight:500;
+    margin-top:4px;
+  }
+
+  /* ---------- HUD ---------- */
+  #hud{
+    position:fixed; inset:0; z-index:20;
+    pointer-events:none;
+    display:none;
+  }
+  #topBar{
+    position:absolute; top:0; left:0; right:0;
+    display:flex; justify-content:center; align-items:flex-start;
+    gap:10px;
+    padding-top: max(14px, env(safe-area-inset-top));
+  }
+  #topBadge{
+    background:rgba(26,27,46,0.72);
+    border:3px solid var(--yellow);
+    border-radius:18px;
+    color:var(--paper);
+    font-weight:700;
+    font-size:15px;
+    padding:8px 18px;
+    letter-spacing:0.5px;
+    backdrop-filter: blur(4px);
+  }
+  #settingsBtn{
+    pointer-events:auto;
+    width:42px; height:42px;
+    border-radius:14px;
+    border:3px solid var(--yellow);
+    background:rgba(26,27,46,0.72);
+    backdrop-filter: blur(4px);
+    font-size:19px;
+    display:flex; align-items:center; justify-content:center;
+    cursor:pointer;
+    transition: transform 0.08s ease;
+  }
+  #settingsBtn:active{
+    transform: scale(0.88);
+  }
+
+  /* ---------- SETTINGS PANEL ---------- */
+  #settingsPanel{
+    position:fixed; inset:0; z-index:40;
+    background:rgba(26,27,46,0.78);
+    display:none;
+    align-items:center; justify-content:center;
+    pointer-events:auto;
+    padding:20px;
+  }
+  #settingsPanel.show{ display:flex; }
+  #settingsCard{
+    background:var(--ink-2);
+    border:4px solid var(--yellow);
+    border-radius:24px;
+    padding:26px 24px;
+    width:100%;
+    max-width:340px;
+    box-shadow:0 14px 0 rgba(0,0,0,0.35);
+  }
+  .settingsTitle{
+    color:var(--paper);
+    font-weight:800;
+    font-size:20px;
+    text-align:center;
+    margin-bottom:18px;
+    letter-spacing:0.5px;
+  }
+  .settingsLabel{
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    color:rgba(245,245,255,0.85);
+    font-weight:700;
+    font-size:14px;
+    margin-bottom:8px;
+  }
+  .settingsLabel span{
+    color:var(--yellow);
+    font-weight:800;
+  }
+  #sensSlider, #volSlider{
+    width:100%;
+    margin-bottom:22px;
+    -webkit-appearance:none;
+    appearance:none;
+    height:10px;
+    border-radius:6px;
+    background:rgba(255,255,255,0.15);
+    outline:none;
+  }
+  #sensSlider::-webkit-slider-thumb, #volSlider::-webkit-slider-thumb{
+    -webkit-appearance:none;
+    appearance:none;
+    width:26px; height:26px;
+    border-radius:50%;
+    background:var(--coral);
+    border:3px solid var(--coral-dark);
+    cursor:pointer;
+  }
+  #sensSlider::-moz-range-thumb, #volSlider::-moz-range-thumb{
+    width:26px; height:26px;
+    border-radius:50%;
+    background:var(--coral);
+    border:3px solid var(--coral-dark);
+    cursor:pointer;
+  }
+  #settingsCloseBtn{
+    width:100%;
+    font-family:'Baloo 2', sans-serif;
+    font-weight:800;
+    font-size:17px;
+    color:var(--ink);
+    background:var(--mint);
+    border:none;
+    border-radius:16px;
+    padding:14px;
+    box-shadow: 0 6px 0 #2bb87d;
+    cursor:pointer;
+    transition: transform 0.08s ease, box-shadow 0.08s ease;
+  }
+  #settingsCloseBtn:active{
+    transform: translateY(4px);
+    box-shadow: 0 2px 0 #2bb87d;
+  }
+
+  /* Multiplayer menu */
+  #modeScreen, #roomScreen, #lobbyScreen{
+    position:fixed; inset:0; z-index:55;
+    display:none;
+    align-items:center; justify-content:center;
+    flex-direction:column;
+    background:
+      radial-gradient(circle at 30% 20%, rgba(124,92,255,0.35), transparent 55%),
+      radial-gradient(circle at 75% 80%, rgba(255,93,93,0.35), transparent 55%),
+      var(--ink);
+    gap:18px;
+    padding:24px;
+    text-align:center;
+  }
+  #modeScreen.show, #roomScreen.show, #lobbyScreen.show{ display:flex; }
+  .netTitle{
+    font-weight:800;
+    font-size:clamp(24px,7vw,34px);
+    color:var(--paper);
+  }
+  .netSub{
+    font-weight:600;
+    font-size:14px;
+    color:rgba(245,245,255,0.6);
+    max-width:320px;
+    margin-top:-8px;
+  }
+  .netBtn{
+    font-family:'Baloo 2', sans-serif;
+    font-weight:800;
+    font-size:18px;
+    color:var(--ink);
+    border:none;
+    border-radius:18px;
+    padding:16px 30px;
+    width:100%;
+    max-width:300px;
+    cursor:pointer;
+    transition: transform 0.08s ease, box-shadow 0.08s ease;
+  }
+  .netBtn:active{ transform: translateY(4px); }
+  .netBtn.yellow{ background:var(--yellow); box-shadow:0 6px 0 var(--yellow-dark); }
+  .netBtn.yellow:active{ box-shadow:0 2px 0 var(--yellow-dark); }
+  .netBtn.mint{ background:var(--mint); box-shadow:0 6px 0 #2bb87d; }
+  .netBtn.mint:active{ box-shadow:0 2px 0 #2bb87d; }
+  .netBtn.violet{ background:var(--violet); color:var(--paper); box-shadow:0 6px 0 var(--violet-dark); }
+  .netBtn.violet:active{ box-shadow:0 2px 0 var(--violet-dark); }
+  .netBtn.ghost{
+    background:transparent; color:rgba(245,245,255,0.7);
+    border:3px solid rgba(245,245,255,0.25); box-shadow:none;
+    padding:12px 30px; font-size:15px;
+  }
+  #roomCodeInput{
+    width:100%; max-width:300px;
+    font-family:'Baloo 2', sans-serif;
+    font-weight:800;
+    font-size:26px;
+    letter-spacing:4px;
+    text-align:center;
+    text-transform:uppercase;
+    color:var(--ink);
+    background:var(--paper);
+    border:4px solid var(--yellow);
+    border-radius:18px;
+    padding:14px 10px;
+    outline:none;
+  }
+  #roomCodeDisplay{
+    font-family:'Baloo 2', sans-serif;
+    font-weight:800;
+    font-size:clamp(32px,10vw,48px);
+    letter-spacing:6px;
+    color:var(--yellow);
+    background:rgba(0,0,0,0.25);
+    border:4px solid var(--yellow);
+    border-radius:20px;
+    padding:14px 26px;
+    cursor:pointer;
+    user-select:all;
+  }
+  #lobbyPlayers{
+    display:flex; flex-direction:column; gap:8px;
+    width:100%; max-width:300px;
+    max-height:160px; overflow-y:auto;
+  }
+  .lobbyPlayerRow{
+    display:flex; align-items:center; gap:10px;
+    background:rgba(255,255,255,0.08);
+    border-radius:12px;
+    padding:8px 14px;
+    color:var(--paper);
+    font-weight:700;
+    font-size:14px;
+    text-align:left;
+  }
+  .lobbyPlayerRow .dot{ width:10px; height:10px; border-radius:50%; background:var(--mint); flex-shrink:0; }
+  #netStatus{
+    color:rgba(245,245,255,0.55);
+    font-size:13px;
+    font-weight:600;
+    min-height:18px;
+  }
+  #netError{
+    color:var(--coral);
+    font-size:13px;
+    font-weight:700;
+    min-height:18px;
+  }
+  #netBadge{
+    position:fixed;
+    top: max(64px, calc(env(safe-area-inset-top) + 60px));
+    left: 14px;
+    z-index:21;
+    background:rgba(26,27,46,0.72);
+    border:2px solid var(--mint);
+    border-radius:12px;
+    color:var(--paper);
+    font-weight:700;
+    font-size:12px;
+    padding:6px 12px;
+    display:none;
+    pointer-events:none;
+  }
+  #netBadge.show{ display:block; }
+  .netPlayerTag{
+    position:absolute;
+    transform:translate(-50%,-100%);
+    background:rgba(26,27,46,0.75);
+    color:var(--paper);
+    font-weight:700;
+    font-size:12px;
+    padding:3px 9px;
+    border-radius:10px;
+    pointer-events:none;
+    white-space:nowrap;
+  }
+
+  /* Joystick */
+  #joystickZone{
+    position:absolute;
+    left: max(18px, env(safe-area-inset-left));
+    bottom: max(18px, env(safe-area-inset-bottom));
+    width:150px; height:150px;
+    pointer-events:auto;
+    z-index:2;
+  }
+  #joyBase{
+    position:absolute; inset:0;
+    border-radius:50%;
+    background:rgba(255,255,255,0.08);
+    border:4px solid rgba(255,255,255,0.25);
+  }
+  #joyStick{
+    position:absolute;
+    width:64px; height:64px;
+    left:50%; top:50%;
+    margin-left:-32px; margin-top:-32px;
+    border-radius:50%;
+    background:var(--coral);
+    border:4px solid var(--coral-dark);
+    box-shadow:0 4px 10px rgba(0,0,0,0.35);
+    transition: transform 0.05s linear;
+  }
+
+  /* Look zone (drag to rotate camera, first-person) */
+  #lookZone{
+    position:absolute;
+    top: calc(64px + env(safe-area-inset-top));
+    right:0; bottom:0;
+    left:38%;
+    pointer-events:auto;
+    z-index:1;
+  }
+
+  /* Action buttons */
+  #actionZone{
+    position:absolute;
+    right: max(18px, env(safe-area-inset-right));
+    bottom: max(18px, env(safe-area-inset-bottom));
+    display:flex; flex-direction:column; align-items:center;
+    gap:14px;
+    pointer-events:auto;
+    z-index:2;
+  }
+  .actionBtn{
+    width:88px; height:88px;
+    border-radius:50%;
+    border:none;
+    font-family:'Baloo 2', sans-serif;
+    font-weight:800;
+    font-size:13px;
+    color:var(--ink);
+    display:flex; align-items:center; justify-content:center;
+    flex-direction:column;
+    line-height:1.1;
+    cursor:pointer;
+    transition: transform 0.07s ease, box-shadow 0.07s ease, opacity 0.15s ease;
+  }
+  .actionBtn .icon{ font-size:28px; margin-bottom:2px; }
+  #kickBtn{
+    background:var(--coral);
+    box-shadow:0 7px 0 var(--coral-dark), 0 10px 18px rgba(0,0,0,0.35);
+    color:var(--paper);
+  }
+  #kickBtn:active{
+    transform:translateY(6px) scale(0.95);
+    box-shadow:0 1px 0 var(--coral-dark), 0 4px 10px rgba(0,0,0,0.3);
+  }
+  #kickBtn.disabled{
+    opacity:0.35;
+    filter:grayscale(0.6);
+    pointer-events:none;
+  }
+  #dynamiteBtn{
+    background:var(--violet);
+    box-shadow:0 7px 0 var(--violet-dark), 0 10px 18px rgba(0,0,0,0.35);
+    color:var(--paper);
+    width:76px; height:76px;
+    font-size:11px;
+  }
+  #dynamiteBtn:active{
+    transform:translateY(6px) scale(0.95);
+    box-shadow:0 1px 0 var(--violet-dark), 0 4px 10px rgba(0,0,0,0.3);
+  }
+  #dynamiteBtn.disabled{
+    opacity:0.35;
+    filter:grayscale(0.6);
+    pointer-events:none;
+  }
+
+  /* prompt bubble e.g. "МОЖНО ПНУТЬ!" */
+  #proximityHint{
+    position:absolute;
+    left:50%; top:20%;
+    transform:translate(-50%,-50%) scale(0.8);
+    background:var(--yellow);
+    color:var(--ink);
+    font-weight:800;
+    font-size:16px;
+    padding:10px 20px;
+    border-radius:16px;
+    box-shadow:0 6px 0 var(--yellow-dark);
+    opacity:0;
+    transition: opacity 0.15s ease, transform 0.15s ease;
+    white-space:nowrap;
+    pointer-events:none;
+  }
+  #proximityHint.show{
+    opacity:1;
+    transform:translate(-50%,-50%) scale(1);
+  }
+
+  /* orientation notice (informational only, game works both ways) */
+  #rotateNotice{
+    position:fixed; inset:0; z-index:60;
+    background:var(--ink);
+    display:none;
+    align-items:center; justify-content:center;
+    flex-direction:column;
+    color:var(--paper);
+    font-weight:700;
+    text-align:center;
+    padding:30px;
+    gap:14px;
+  }
+</style>
+</head>
+<body>
+
+<div id="app">
+  <canvas id="gameCanvas"></canvas>
+
+  <!-- START SCREEN -->
+  <div id="startScreen">
+    <div class="logo">ПИНОК<span>.IO</span></div>
+    <div class="sub">Беги, пинай манекенов и взрывай всё динамитом</div>
+    <button id="tapButton">ТАП ЧТОБЫ НАЧАТЬ</button>
+    <div class="hint">Полноэкранный режим включится автоматически</div>
+  </div>
+
+  <!-- MODE SELECT: single player / host / join -->
+  <div id="modeScreen">
+    <div class="netTitle">РЕЖИМ ИГРЫ</div>
+    <button id="soloBtn" class="netBtn yellow">ОДИН</button>
+    <button id="hostBtn" class="netBtn mint">СОЗДАТЬ КОМНАТУ</button>
+    <button id="joinBtn" class="netBtn violet">ВОЙТИ ПО КОДУ</button>
+  </div>
+
+  <!-- JOIN: enter room code -->
+  <div id="roomScreen">
+    <div class="netTitle">ВВЕДИ КОД</div>
+    <div class="netSub">Код комнаты тебе даст хост</div>
+    <input id="roomCodeInput" maxlength="6" placeholder="ABC123" autocomplete="off" autocapitalize="characters">
+    <button id="roomJoinConfirmBtn" class="netBtn violet">ПОДКЛЮЧИТЬСЯ</button>
+    <div id="netError"></div>
+    <button id="roomBackBtn" class="netBtn ghost">НАЗАД</button>
+  </div>
+
+  <!-- LOBBY: waiting room (host sees code, guests see host status) -->
+  <div id="lobbyScreen">
+    <div class="netTitle" id="lobbyTitle">КОМНАТА</div>
+    <div id="roomCodeDisplay">------</div>
+    <div id="netStatus"></div>
+    <div id="lobbyPlayers"></div>
+    <button id="lobbyStartBtn" class="netBtn mint">НАЧАТЬ ИГРУ</button>
+    <button id="lobbyBackBtn" class="netBtn ghost">ОТМЕНА</button>
+  </div>
+
+  <!-- Small persistent net status badge shown during gameplay -->
+  <div id="netBadge"></div>
+
+  <!-- HUD -->
+  <div id="hud">
+    <div id="topBar">
+      <div id="topBadge">ПИНОК.IO — тест-полигон</div>
+      <button id="settingsBtn" aria-label="Настройки">⚙️</button>
+    </div>
+
+    <div id="proximityHint">👟 МОЖНО ПНУТЬ!</div>
+
+    <div id="joystickZone">
+      <div id="joyBase"></div>
+      <div id="joyStick"></div>
+    </div>
+
+    <div id="lookZone"></div>
+
+    <div id="actionZone">
+      <button id="kickBtn" class="actionBtn disabled">
+        <div class="icon">👟</div>
+        ПНУТЬ
+      </button>
+      <button id="dynamiteBtn" class="actionBtn">
+        <div class="icon">🧨</div>
+        ДИНАМИТ
+      </button>
+    </div>
+
+    <div id="settingsPanel">
+      <div id="settingsCard">
+        <div class="settingsTitle">НАСТРОЙКИ</div>
+
+        <label class="settingsLabel" for="sensSlider">
+          Чувствительность камеры
+          <span id="sensValue">50%</span>
+        </label>
+        <input type="range" id="sensSlider" min="5" max="150" value="50" step="1">
+
+        <label class="settingsLabel" for="volSlider">
+          Громкость звука
+          <span id="volValue">80%</span>
+        </label>
+        <input type="range" id="volSlider" min="0" max="100" value="80" step="1">
+
+        <button id="settingsCloseBtn">ГОТОВО</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  'use strict';
+
+  // ======================================================================
+  // TODO: этап 2 — сюда позже добавится:
+  //   - PeerJS соединение и сетевой мультиплеер
+  //   - Чат между игроками
+  //   - Раздевалка / выбор скина персонажа
+  //   - Разделение на одиночный / сетевой режимы
+  // В этой версии ничего из вышеперечисленного не реализуется и не заглушается.
+  // ======================================================================
+
+  // ---------------------------------------------------------------------
+  // GLOBAL STATE
+  // ---------------------------------------------------------------------
+  var startScreen = document.getElementById('startScreen');
+  var tapButton = document.getElementById('tapButton');
+  var hud = document.getElementById('hud');
+  var canvas = document.getElementById('gameCanvas');
+
+  var modeScreen = document.getElementById('modeScreen');
+  var soloBtn = document.getElementById('soloBtn');
+  var hostBtn = document.getElementById('hostBtn');
+  var joinBtn = document.getElementById('joinBtn');
+
+  var roomScreen = document.getElementById('roomScreen');
+  var roomCodeInput = document.getElementById('roomCodeInput');
+  var roomJoinConfirmBtn = document.getElementById('roomJoinConfirmBtn');
+  var roomBackBtn = document.getElementById('roomBackBtn');
+  var netError = document.getElementById('netError');
+
+  var lobbyScreen = document.getElementById('lobbyScreen');
+  var lobbyTitle = document.getElementById('lobbyTitle');
+  var roomCodeDisplay = document.getElementById('roomCodeDisplay');
+  var netStatus = document.getElementById('netStatus');
+  var lobbyPlayers = document.getElementById('lobbyPlayers');
+  var lobbyStartBtn = document.getElementById('lobbyStartBtn');
+  var lobbyBackBtn = document.getElementById('lobbyBackBtn');
+  var netBadge = document.getElementById('netBadge');
+
+  var gameStarted = false;
+
+  // ---------------------------------------------------------------------
+  // SETTINGS (sensitivity + volume, persisted across reloads)
+  // ---------------------------------------------------------------------
+  var Settings = {
+    sensitivity: 50, // percent, slider range 5-150, 50 = default feel
+    volume: 80        // percent, master volume 0-100
+  };
+
+  (function loadSettings(){
+    try{
+      var saved = localStorage.getItem('pinokSettings');
+      if(saved){
+        var parsed = JSON.parse(saved);
+        if(typeof parsed.sensitivity === 'number') Settings.sensitivity = parsed.sensitivity;
+        if(typeof parsed.volume === 'number') Settings.volume = parsed.volume;
+      }
+    }catch(e){ /* localStorage unavailable or corrupt data: keep defaults */ }
+  })();
+
+  function saveSettings(){
+    try{
+      localStorage.setItem('pinokSettings', JSON.stringify(Settings));
+    }catch(e){ /* ignore */ }
+  }
+
+  var settingsBtn = document.getElementById('settingsBtn');
+  var settingsPanel = document.getElementById('settingsPanel');
+  var settingsCloseBtn = document.getElementById('settingsCloseBtn');
+  var sensSlider = document.getElementById('sensSlider');
+  var sensValue = document.getElementById('sensValue');
+  var volSlider = document.getElementById('volSlider');
+  var volValue = document.getElementById('volValue');
+
+  function setupSettingsPanel(){
+    sensSlider.value = Settings.sensitivity;
+    sensValue.textContent = Settings.sensitivity + '%';
+    volSlider.value = Settings.volume;
+    volValue.textContent = Settings.volume + '%';
+
+    settingsBtn.addEventListener('click', function(){
+      settingsPanel.classList.add('show');
+    });
+    settingsCloseBtn.addEventListener('click', function(){
+      settingsPanel.classList.remove('show');
+    });
+
+    sensSlider.addEventListener('input', function(){
+      Settings.sensitivity = parseInt(sensSlider.value, 10);
+      sensValue.textContent = Settings.sensitivity + '%';
+      saveSettings();
+    });
+    volSlider.addEventListener('input', function(){
+      Settings.volume = parseInt(volSlider.value, 10);
+      volValue.textContent = Settings.volume + '%';
+      saveSettings();
+      applyMasterVolume();
+    });
+  }
+
+  // ---------------------------------------------------------------------
+  // NETWORKING — serverless P2P via PeerJS (public signalling server only
+  // for the initial handshake; all game traffic afterwards is direct P2P).
+  // Star topology: the host is the hub every guest connects to directly.
+  // The host is authoritative for NPC dummy physics, dynamite, and
+  // explosions so all players see one consistent outcome; guests are
+  // authoritative for their own avatar position/look, which they stream
+  // to the host, and the host re-broadcasts every player's state to
+  // everyone else. Room code = short alphanumeric suffix on the PeerJS id
+  // (prefixed so we don't collide with unrelated peers on the public
+  // broker), so "joining by code" needs no server of our own at all.
+  // ---------------------------------------------------------------------
+  var Net = (function(){
+    var ROOM_PREFIX = 'pinokio-room-';
+    var MAX_PLAYERS = 8;
+
+    var state = {
+      role: null,        // 'host' | 'guest' | null (solo)
+      peer: null,         // PeerJS Peer instance
+      roomCode: null,
+      myId: null,         // short id used in game state (host = 'host', guests = their peer suffix)
+      conns: {},           // host only: peerId -> DataConnection
+      hostConn: null,      // guest only: DataConnection to host
+      players: {},          // playerId -> { name, connected }
+      remoteAvatars: {},     // playerId -> three.js group + label element
+      onPlayerListChange: null,
+      onError: null,
+      onHostState: null,     // guest: called with full state snapshot from host
+      onGuestInput: null,     // host: called with input packet from a guest
+      onRemoteEvent: null      // both: called with a gameplay event (kick/throw/explosion)
+    };
+
+    function randomCode(len){
+      var chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no 0/O/1/I to avoid confusion
+      var out = '';
+      for(var i=0;i<len;i++) out += chars[Math.floor(Math.random()*chars.length)];
+      return out;
+    }
+
+    function makePeer(id, onOpen, onErr){
+      var p;
+      try{
+        p = new Peer(id, {
+          debug: 0,
+          config: {
+            iceServers: [
+              { urls: 'stun:stun.l.google.com:19302' },
+              { urls: 'stun:stun1.l.google.com:19302' }
+            ]
+          }
+        });
+      }catch(e){
+        onErr(e);
+        return null;
+      }
+      p.on('open', function(assignedId){ onOpen(assignedId); });
+      p.on('error', function(err){ onErr(err); });
+      return p;
+    }
+
+    function broadcastToGuests(msg, exceptId){
+      for(var pid in state.conns){
+        if(pid === exceptId) continue;
+        var c = state.conns[pid];
+        if(c && c.open) c.send(msg);
+      }
+    }
+
+    // ---- HOST ----
+    function hostCreateRoom(displayCb){
+      state.role = 'host';
+      state.myId = 'host';
+      state.roomCode = randomCode(6);
+      state.players = { host: { name: 'Хост', connected: true } };
+
+      var peerId = ROOM_PREFIX + state.roomCode;
+      state.peer = makePeer(peerId, function(){
+        displayCb(null, state.roomCode);
+        fireListChange();
+      }, function(err){
+        var msg = describeError(err);
+        displayCb(msg, null);
+        if(state.onError) state.onError(msg);
+      });
+
+      if(!state.peer) return;
+
+      state.peer.on('connection', function(conn){
+        if(Object.keys(state.players).length >= MAX_PLAYERS){
+          conn.on('open', function(){
+            conn.send({ t:'full' });
+            setTimeout(function(){ conn.close(); }, 300);
+          });
+          return;
+        }
+        wireHostConnection(conn);
+      });
+    }
+
+    function wireHostConnection(conn){
+      var pid = conn.peer;
+      conn.on('open', function(){
+        state.conns[pid] = conn;
+        state.players[pid] = { name: 'Игрок ' + shortId(pid), connected: true };
+        fireListChange();
+
+        // tell the new guest who's already here + their assigned id
+        conn.send({ t:'welcome', id: pid, players: state.players });
+        // tell everyone else the roster changed
+        broadcastToGuests({ t:'roster', players: state.players }, pid);
+      });
+
+      conn.on('data', function(msg){
+        handleHostMessage(pid, msg);
+      });
+
+      conn.on('close', function(){
+        dropGuest(pid);
+      });
+      conn.on('error', function(){
+        dropGuest(pid);
+      });
+    }
+
+    function dropGuest(pid){
+      if(!state.players[pid]) return;
+      delete state.conns[pid];
+      delete state.players[pid];
+      fireListChange();
+      broadcastToGuests({ t:'roster', players: state.players });
+      if(state.onRemoteEvent) state.onRemoteEvent({ t:'leave', id: pid });
+    }
+
+    function handleHostMessage(pid, msg){
+      if(!msg || !msg.t) return;
+      if(msg.t === 'input'){
+        // relay this guest's live state to everyone else immediately;
+        // the host's own animate() loop folds it into the authoritative
+        // snapshot it broadcasts every tick.
+        if(state.onGuestInput) state.onGuestInput(pid, msg);
+        broadcastToGuests({ t:'peerState', id: pid, state: msg.state }, pid);
+      } else if(msg.t === 'event'){
+        // NOTE: guest-originated gameplay events are NOT auto-relayed here —
+        // they carry client-reported (non-authoritative) data. The game
+        // logic layer (onRemoteEvent) re-simulates them authoritatively and
+        // explicitly calls hostBroadcastEvent() with the validated outcome.
+        msg.id = pid;
+        if(state.onRemoteEvent) state.onRemoteEvent(msg);
+      }
+    }
+
+    // host calls this every tick to push the authoritative world snapshot
+    // (dummy positions, dynamite, explosions) to all guests
+    function hostBroadcastSnapshot(snapshot){
+      if(state.role !== 'host') return;
+      broadcastToGuests({ t:'snapshot', data: snapshot });
+    }
+
+    function hostBroadcastEvent(evt){
+      if(state.role !== 'host') return;
+      evt.id = state.myId;
+      broadcastToGuests(evt);
+      // host doesn't need to loop the event back to itself; caller already
+      // applied it locally before calling this
+    }
+
+    // ---- GUEST ----
+    function guestJoinRoom(code, displayCb){
+      state.role = 'guest';
+      state.roomCode = code;
+
+      state.peer = makePeer(null, function(assignedPeerId){
+        state.myId = assignedPeerId;
+        var hostPeerId = ROOM_PREFIX + code;
+        var conn = state.peer.connect(hostPeerId, { reliable: true });
+        var settled = false;
+
+        var timeout = setTimeout(function(){
+          if(!settled){
+            settled = true;
+            displayCb('Комната не найдена. Проверь код.', null);
+          }
+        }, 9000);
+
+        conn.on('open', function(){
+          state.hostConn = conn;
+        });
+
+        conn.on('data', function(msg){
+          if(!msg || !msg.t) return;
+          if(msg.t === 'full'){
+            if(!settled){ settled = true; clearTimeout(timeout); }
+            displayCb('Комната уже заполнена (максимум ' + MAX_PLAYERS + ').', null);
+            return;
+          }
+          if(msg.t === 'welcome'){
+            if(!settled){
+              settled = true;
+              clearTimeout(timeout);
+              state.players = msg.players;
+              displayCb(null, state.roomCode);
+              fireListChange();
+            }
+          } else {
+            handleGuestMessage(msg);
+          }
+        });
+
+        conn.on('close', function(){
+          if(state.onError) state.onError('Соединение с хостом потеряно.');
+        });
+        conn.on('error', function(){
+          if(!settled){
+            settled = true;
+            clearTimeout(timeout);
+            displayCb('Не удалось подключиться. Проверь код.', null);
+          }
+        });
+      }, function(err){
+        var msg = describeError(err);
+        displayCb(msg, null);
+      });
+    }
+
+    function handleGuestMessage(msg){
+      if(msg.t === 'roster'){
+        state.players = msg.players;
+        fireListChange();
+      } else if(msg.t === 'snapshot'){
+        if(state.onHostState) state.onHostState(msg.data);
+      } else if(msg.t === 'peerState'){
+        if(state.onRemoteEvent) state.onRemoteEvent({ t:'peerState', id: msg.id, state: msg.state });
+      } else if(msg.t === 'event'){
+        if(state.onRemoteEvent) state.onRemoteEvent(msg);
+      }
+    }
+
+    // guest calls this every tick to stream its own live state to the host
+    function guestSendInput(playerState){
+      if(state.role !== 'guest' || !state.hostConn || !state.hostConn.open) return;
+      state.hostConn.send({ t:'input', state: playerState });
+    }
+
+    // guest calls this for discrete actions (kick/throw) — host re-simulates
+    // and broadcasts the authoritative outcome
+    function guestSendEvent(evt){
+      if(state.role !== 'guest' || !state.hostConn || !state.hostConn.open) return;
+      state.hostConn.send({ t:'event', payload: evt });
+    }
+
+    function shortId(pid){
+      return pid.slice(-4).toUpperCase();
+    }
+
+    function describeError(err){
+      var type = err && err.type;
+      if(type === 'peer-unavailable') return 'Комната не найдена. Проверь код.';
+      if(type === 'network' || type === 'server-error' || type === 'socket-error' || type === 'socket-closed') return 'Нет соединения с сетью. Проверь интернет.';
+      if(type === 'unavailable-id') return 'Не удалось создать комнату, попробуй ещё раз.';
+      if(type === 'browser-incompatible') return 'Браузер не поддерживает P2P-соединения.';
+      return 'Ошибка сети. Попробуй ещё раз.';
+    }
+
+    function fireListChange(){
+      if(state.onPlayerListChange) state.onPlayerListChange(state.players);
+    }
+
+    function isMultiplayer(){ return state.role === 'host' || state.role === 'guest'; }
+    function isHost(){ return state.role === 'host'; }
+
+    function teardown(){
+      try{
+        if(state.peer) state.peer.destroy();
+      }catch(e){}
+      state.role = null;
+      state.peer = null;
+      state.roomCode = null;
+      state.myId = null;
+      state.conns = {};
+      state.hostConn = null;
+      state.players = {};
+    }
+
+    return {
+      hostCreateRoom: hostCreateRoom,
+      guestJoinRoom: guestJoinRoom,
+      hostBroadcastSnapshot: hostBroadcastSnapshot,
+      hostBroadcastEvent: hostBroadcastEvent,
+      guestSendInput: guestSendInput,
+      guestSendEvent: guestSendEvent,
+      isMultiplayer: isMultiplayer,
+      isHost: isHost,
+      shortId: shortId,
+      teardown: teardown,
+      state: state
+    };
+  })();
+
+  // ---------------------------------------------------------------------
+  // START SCREEN -> FULLSCREEN -> START GAME
+  // ---------------------------------------------------------------------
+  function requestFullscreenSafe(el){
+    var p = null;
+    try{
+      if(el.requestFullscreen) p = el.requestFullscreen();
+      else if(el.webkitRequestFullscreen) p = el.webkitRequestFullscreen();
+      else if(el.msRequestFullscreen) p = el.msRequestFullscreen();
+    }catch(e){ /* ignore */ }
+    if(p && p.catch) p.catch(function(){ /* fullscreen denied/unsupported: continue anyway */ });
+  }
+
+  function onStartTap(){
+    if(gameStarted) return;
+    requestFullscreenSafe(document.documentElement);
+    // lock orientation if supported (best-effort, ignore failures)
+    try{
+      if(screen.orientation && screen.orientation.lock){
+        screen.orientation.lock('any').catch(function(){});
+      }
+    }catch(e){}
+
+    AudioEngine.init();
+
+    startScreen.style.display = 'none';
+    modeScreen.classList.add('show');
+  }
+
+  function beginSinglePlayer(){
+    if(gameStarted) return;
+    gameStarted = true;
+    modeScreen.classList.remove('show');
+    hud.style.display = 'block';
+    initGame();
+  }
+
+  function beginNetworkGame(){
+    if(gameStarted) return;
+    gameStarted = true;
+    lobbyScreen.classList.remove('show');
+    hud.style.display = 'block';
+    initGame();
+  }
+
+  tapButton.addEventListener('click', onStartTap);
+  tapButton.addEventListener('touchend', function(e){ e.preventDefault(); onStartTap(); }, {passive:false});
+
+  // ---------------------------------------------------------------------
+  // MULTIPLAYER MENU WIRING
+  // ---------------------------------------------------------------------
+  function showScreen(el){
+    modeScreen.classList.remove('show');
+    roomScreen.classList.remove('show');
+    lobbyScreen.classList.remove('show');
+    if(el) el.classList.add('show');
+  }
+
+  function renderLobbyPlayers(){
+    lobbyPlayers.innerHTML = '';
+    var ids = Object.keys(Net.state.players);
+    for(var i=0;i<ids.length;i++){
+      var row = document.createElement('div');
+      row.className = 'lobbyPlayerRow';
+      var dot = document.createElement('div');
+      dot.className = 'dot';
+      var label = document.createElement('div');
+      var isMe = ids[i] === Net.state.myId;
+      var isHostRow = ids[i] === 'host';
+      label.textContent = (isHostRow ? '👑 ' : '') + Net.state.players[ids[i]].name + (isMe ? ' (ты)' : '');
+      row.appendChild(dot);
+      row.appendChild(label);
+      lobbyPlayers.appendChild(row);
+    }
+    netStatus.textContent = ids.length + ' / 8 игроков в комнате';
+  }
+
+  soloBtn.addEventListener('click', function(){
+    showScreen(null);
+    beginSinglePlayer();
+  });
+
+  hostBtn.addEventListener('click', function(){
+    showScreen(lobbyScreen);
+    lobbyTitle.textContent = 'ТВОЯ КОМНАТА';
+    roomCodeDisplay.textContent = '......';
+    netStatus.textContent = 'Создаём комнату…';
+    lobbyPlayers.innerHTML = '';
+    lobbyStartBtn.style.display = 'block';
+
+    Net.state.onPlayerListChange = renderLobbyPlayers;
+    Net.state.onError = function(msg){ netStatus.textContent = msg; };
+
+    Net.hostCreateRoom(function(err, code){
+      if(err){
+        netStatus.textContent = err;
+        return;
+      }
+      roomCodeDisplay.textContent = code;
+      netStatus.textContent = 'Поделись кодом с друзьями';
+      renderLobbyPlayers();
+    });
+  });
+
+  joinBtn.addEventListener('click', function(){
+    showScreen(roomScreen);
+    roomCodeInput.value = '';
+    netError.textContent = '';
+    roomCodeInput.focus();
+  });
+
+  roomBackBtn.addEventListener('click', function(){
+    showScreen(modeScreen);
+  });
+
+  lobbyBackBtn.addEventListener('click', function(){
+    Net.teardown();
+    showScreen(modeScreen);
+  });
+
+  function attemptJoin(){
+    var code = roomCodeInput.value.trim().toUpperCase();
+    if(code.length < 4){
+      netError.textContent = 'Введи полный код комнаты.';
+      return;
+    }
+    netError.textContent = '';
+    roomJoinConfirmBtn.disabled = true;
+    roomJoinConfirmBtn.textContent = 'ПОДКЛЮЧЕНИЕ…';
+
+    Net.state.onPlayerListChange = renderLobbyPlayers;
+    Net.state.onError = function(msg){ netStatus.textContent = msg; };
+
+    Net.guestJoinRoom(code, function(err, joinedCode){
+      roomJoinConfirmBtn.disabled = false;
+      roomJoinConfirmBtn.textContent = 'ПОДКЛЮЧИТЬСЯ';
+      if(err){
+        netError.textContent = err;
+        return;
+      }
+      showScreen(lobbyScreen);
+      lobbyTitle.textContent = 'КОМНАТА ' + joinedCode;
+      roomCodeDisplay.textContent = joinedCode;
+      lobbyStartBtn.style.display = 'none'; // only host starts the match
+      netStatus.textContent = 'Ждём, когда хост начнёт игру…';
+      renderLobbyPlayers();
+
+      // if host starts the match while we're sitting in the lobby, an
+      // explicit start signal (event t:'start') flips us into the game
+      Net.state.onRemoteEvent = function(evt){
+        if(evt.t === 'start'){
+          beginNetworkGame();
+        }
+      };
+    });
+  }
+
+  roomJoinConfirmBtn.addEventListener('click', attemptJoin);
+  roomCodeInput.addEventListener('keydown', function(e){
+    if(e.key === 'Enter') attemptJoin();
+  });
+
+  lobbyStartBtn.addEventListener('click', function(){
+    if(!Net.isHost()) return;
+    Net.hostBroadcastEvent({ t:'start' });
+    beginNetworkGame();
+  });
+
+  // ---------------------------------------------------------------------
+  // AUDIO ENGINE — procedural sound via Web Audio API (no external files).
+  // Footsteps are the player's own body sound, so they always play at full
+  // volume regardless of anything else. Every other sound (kick impact,
+  // dynamite throw/fuse/explosion) is positional: it fades linearly with
+  // distance from the player and is fully silent at 20+ units away.
+  // ---------------------------------------------------------------------
+  var AudioEngine = (function(){
+    var ctx = null;
+    var masterGain = null;
+    var ready = false;
+    var SOUND_MAX_DISTANCE = 20;
+
+    function init(){
+      if(ready) return;
+      try{
+        var AC = window.AudioContext || window.webkitAudioContext;
+        ctx = new AC();
+        masterGain = ctx.createGain();
+        masterGain.gain.value = Settings.volume / 100;
+        masterGain.connect(ctx.destination);
+        ready = true;
+      }catch(e){
+        ready = false; // Web Audio unsupported: game still works, just silent
+      }
+    }
+
+    function resumeIfNeeded(){
+      if(ctx && ctx.state === 'suspended'){
+        ctx.resume().catch(function(){});
+      }
+    }
+
+    function setMasterVolume(v01){
+      if(masterGain) masterGain.gain.value = v01;
+    }
+
+    // distance falloff: 1 at distance 0, linear down to 0 at SOUND_MAX_DISTANCE
+    function distanceGain(worldPos){
+      if(!worldPos) return 1; // no position given = treat as non-positional (full volume)
+      var dx = worldPos.x - playerState.pos.x;
+      var dz = worldPos.z - playerState.pos.z;
+      var dist = Math.sqrt(dx*dx + dz*dz);
+      var g = 1 - (dist / SOUND_MAX_DISTANCE);
+      return Math.max(0, Math.min(1, g));
+    }
+
+    // simple white-noise buffer, reused for percussive/impact sounds
+    var noiseBuffer = null;
+    function getNoiseBuffer(){
+      if(noiseBuffer) return noiseBuffer;
+      if(!ctx) return null;
+      var len = ctx.sampleRate * 1.0;
+      var buf = ctx.createBuffer(1, len, ctx.sampleRate);
+      var data = buf.getChannelData(0);
+      for(var i=0;i<len;i++){
+        data[i] = Math.random() * 2 - 1;
+      }
+      noiseBuffer = buf;
+      return buf;
+    }
+
+    // ---- footstep: soft short tap, always full volume (player's own sound) ----
+    function playFootstep(){
+      if(!ready) return;
+      resumeIfNeeded();
+      var t = ctx.currentTime;
+
+      var osc = ctx.createOscillator();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(110 + Math.random()*20, t);
+      osc.frequency.exponentialRampToValueAtTime(60, t + 0.08);
+
+      var gain = ctx.createGain();
+      gain.gain.setValueAtTime(0.0001, t);
+      gain.gain.exponentialRampToValueAtTime(0.22, t + 0.008);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.09);
+
+      osc.connect(gain);
+      gain.connect(masterGain);
+      osc.start(t);
+      osc.stop(t + 0.1);
+    }
+
+    // ---- kick impact: punchy thump + noise crack, positional ----
+    function playKick(worldPos){
+      if(!ready) return;
+      resumeIfNeeded();
+      var g = distanceGain(worldPos);
+      if(g <= 0) return;
+      var t = ctx.currentTime;
+
+      var localGain = ctx.createGain();
+      localGain.gain.value = g;
+      localGain.connect(masterGain);
+
+      // low thump
+      var osc = ctx.createOscillator();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(180, t);
+      osc.frequency.exponentialRampToValueAtTime(45, t + 0.15);
+      var oscGain = ctx.createGain();
+      oscGain.gain.setValueAtTime(0.5, t);
+      oscGain.gain.exponentialRampToValueAtTime(0.001, t + 0.18);
+      osc.connect(oscGain);
+      oscGain.connect(localGain);
+      osc.start(t);
+      osc.stop(t + 0.2);
+
+      // sharp noise crack on top
+      var noise = ctx.createBufferSource();
+      noise.buffer = getNoiseBuffer();
+      var noiseFilter = ctx.createBiquadFilter();
+      noiseFilter.type = 'highpass';
+      noiseFilter.frequency.value = 1200;
+      var noiseGain = ctx.createGain();
+      noiseGain.gain.setValueAtTime(0.35, t);
+      noiseGain.gain.exponentialRampToValueAtTime(0.001, t + 0.06);
+      noise.connect(noiseFilter);
+      noiseFilter.connect(noiseGain);
+      noiseGain.connect(localGain);
+      noise.start(t);
+      noise.stop(t + 0.07);
+    }
+
+    // ---- dynamite throw: quick whoosh, positional ----
+    function playThrow(worldPos){
+      if(!ready) return;
+      resumeIfNeeded();
+      var g = distanceGain(worldPos);
+      if(g <= 0) return;
+      var t = ctx.currentTime;
+
+      var localGain = ctx.createGain();
+      localGain.gain.value = g;
+      localGain.connect(masterGain);
+
+      var noise = ctx.createBufferSource();
+      noise.buffer = getNoiseBuffer();
+      var filter = ctx.createBiquadFilter();
+      filter.type = 'bandpass';
+      filter.frequency.setValueAtTime(600, t);
+      filter.frequency.exponentialRampToValueAtTime(2200, t + 0.25);
+      filter.Q.value = 0.8;
+      var gain = ctx.createGain();
+      gain.gain.setValueAtTime(0.0001, t);
+      gain.gain.exponentialRampToValueAtTime(0.25, t + 0.05);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.3);
+      noise.connect(filter);
+      filter.connect(gain);
+      gain.connect(localGain);
+      noise.start(t);
+      noise.stop(t + 0.32);
+    }
+
+    // ---- fuse tick: short beep, positional, repeats while dynamite is armed ----
+    function playFuseTick(worldPos){
+      if(!ready) return;
+      resumeIfNeeded();
+      var g = distanceGain(worldPos);
+      if(g <= 0) return;
+      var t = ctx.currentTime;
+
+      var localGain = ctx.createGain();
+      localGain.gain.value = g;
+      localGain.connect(masterGain);
+
+      var osc = ctx.createOscillator();
+      osc.type = 'square';
+      osc.frequency.value = 1400;
+      var gain = ctx.createGain();
+      gain.gain.setValueAtTime(0.0001, t);
+      gain.gain.exponentialRampToValueAtTime(0.15, t + 0.006);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.05);
+      osc.connect(gain);
+      gain.connect(localGain);
+      osc.start(t);
+      osc.stop(t + 0.06);
+    }
+
+    // ---- explosion: deep boom (low sine sweep) + layered noise blast, positional ----
+    function playExplosion(worldPos){
+      if(!ready) return;
+      resumeIfNeeded();
+      var g = distanceGain(worldPos);
+      if(g <= 0) return;
+      var t = ctx.currentTime;
+
+      var localGain = ctx.createGain();
+      localGain.gain.value = g;
+      localGain.connect(masterGain);
+
+      // deep sub boom
+      var osc = ctx.createOscillator();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(120, t);
+      osc.frequency.exponentialRampToValueAtTime(28, t + 0.5);
+      var oscGain = ctx.createGain();
+      oscGain.gain.setValueAtTime(0.7, t);
+      oscGain.gain.exponentialRampToValueAtTime(0.001, t + 0.7);
+      osc.connect(oscGain);
+      oscGain.connect(localGain);
+      osc.start(t);
+      osc.stop(t + 0.75);
+
+      // broadband noise blast, filtered down over time (classic explosion "whump")
+      var noise = ctx.createBufferSource();
+      noise.buffer = getNoiseBuffer();
+      var filter = ctx.createBiquadFilter();
+      filter.type = 'lowpass';
+      filter.frequency.setValueAtTime(4000, t);
+      filter.frequency.exponentialRampToValueAtTime(200, t + 0.9);
+      var noiseGain = ctx.createGain();
+      noiseGain.gain.setValueAtTime(0.6, t);
+      noiseGain.gain.exponentialRampToValueAtTime(0.001, t + 0.9);
+      noise.connect(filter);
+      filter.connect(noiseGain);
+      noiseGain.connect(localGain);
+      noise.start(t);
+      noise.stop(t + 0.9);
+    }
+
+    return {
+      init: init,
+      setMasterVolume: setMasterVolume,
+      playFootstep: playFootstep,
+      playKick: playKick,
+      playThrow: playThrow,
+      playFuseTick: playFuseTick,
+      playExplosion: playExplosion
+    };
+  })();
+
+  function applyMasterVolume(){
+    AudioEngine.setMasterVolume(Settings.volume / 100);
+  }
+
+  // ---------------------------------------------------------------------
+  // THREE.JS SETUP
+  // ---------------------------------------------------------------------
+  var scene, camera, renderer, clock;
+  var groundMesh;
+  var rockColliders = []; // {x, z, radius} for each rock — used for solid collision
+  var player, playerMixerData;
+  var dummies = []; // NPC manikins
+  var dynamites = []; // active thrown dynamite objects
+  var explosionEffects = [];
+
+  var WORLD_SIZE = 90;
+
+  function initGame(){
+    scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x8ecae6);
+    scene.fog = new THREE.Fog(0x8ecae6, 40, 110);
+
+    camera = new THREE.PerspectiveCamera(72, window.innerWidth/window.innerHeight, 0.1, 500);
+    camera.rotation.order = 'YXZ';
+
+    renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias:true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+    clock = new THREE.Clock();
+
+    setupLights();
+    setupGround();
+    setupPlayer();
+    setupDummies();
+    updateCamera(0);
+
+    window.addEventListener('resize', onResize);
+    onResize();
+
+    setupJoystick();
+    setupLookControl();
+    setupKickButton();
+    setupDynamiteButton();
+    setupSettingsPanel();
+
+    if(Net.isMultiplayer()) setupNetworkedPlay();
+
+    animate();
+  }
+
+  function onResize(){
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+  }
+
+  // ---------------------------------------------------------------------
+  // LIGHTS
+  // ---------------------------------------------------------------------
+  function setupLights(){
+    var hemi = new THREE.HemisphereLight(0xbfe3ff, 0x3a6b35, 0.9);
+    scene.add(hemi);
+
+    var sun = new THREE.DirectionalLight(0xfff3d6, 1.15);
+    sun.position.set(30, 45, 20);
+    sun.castShadow = true;
+    sun.shadow.mapSize.width = 2048;
+    sun.shadow.mapSize.height = 2048;
+    sun.shadow.camera.left = -60;
+    sun.shadow.camera.right = 60;
+    sun.shadow.camera.top = 60;
+    sun.shadow.camera.bottom = -60;
+    sun.shadow.camera.near = 1;
+    sun.shadow.camera.far = 150;
+    sun.shadow.bias = -0.0015;
+    scene.add(sun);
+
+    var fill = new THREE.DirectionalLight(0xffd6e8, 0.25);
+    fill.position.set(-20, 20, -30);
+    scene.add(fill);
+  }
+
+  // ---------------------------------------------------------------------
+  // GROUND — low poly hilly terrain
+  // ---------------------------------------------------------------------
+  function terrainHeight(x, z){
+    // smooth layered noise-ish hills using sines (deterministic, no libs needed)
+    return (
+      Math.sin(x*0.09) * Math.cos(z*0.07) * 2.2 +
+      Math.sin(x*0.19 + 1.7) * Math.cos(z*0.23) * 1.1 +
+      Math.sin((x+z)*0.05) * 1.4
+    );
+  }
+
+  function setupGround(){
+    var segs = 64;
+    var geo = new THREE.PlaneGeometry(WORLD_SIZE, WORLD_SIZE, segs, segs);
+    geo.rotateX(-Math.PI/2);
+
+    var pos = geo.attributes.position;
+    for(var i=0;i<pos.count;i++){
+      var x = pos.getX(i);
+      var z = pos.getZ(i);
+      var h = terrainHeight(x, z);
+      pos.setY(i, h);
+    }
+    geo.computeVertexNormals();
+
+    // low-poly flat shading via vertex colors (grass gradient by height)
+    var colors = [];
+    var colorLow = new THREE.Color(0x4fae5a);
+    var colorHigh = new THREE.Color(0x8fd66a);
+    for(var j=0;j<pos.count;j++){
+      var h2 = pos.getY(j);
+      var t = THREE.MathUtils.clamp((h2 + 3) / 6, 0, 1);
+      var c = colorLow.clone().lerp(colorHigh, t);
+      colors.push(c.r, c.g, c.b);
+    }
+    geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+
+    var mat = new THREE.MeshStandardMaterial({
+      vertexColors: true,
+      flatShading: true,
+      roughness: 0.95,
+      metalness: 0.0
+    });
+
+    groundMesh = new THREE.Mesh(geo, mat);
+    groundMesh.receiveShadow = true;
+    scene.add(groundMesh);
+
+    // simple boundary wall ring markers (low poly rocks) so player senses edges —
+    // these are solid: player and dummies collide with them instead of passing through
+    var rockGeo = new THREE.DodecahedronGeometry(1, 0);
+    var rockMat = new THREE.MeshStandardMaterial({ color:0x7d7d7d, flatShading:true, roughness:1 });
+    var ringCount = 28;
+    for(var k=0;k<ringCount;k++){
+      var ang = (k/ringCount) * Math.PI * 2;
+      var rx = Math.cos(ang) * (WORLD_SIZE/2 - 2);
+      var rz = Math.sin(ang) * (WORLD_SIZE/2 - 2);
+      var ry = terrainHeight(rx, rz);
+      var rock = new THREE.Mesh(rockGeo, rockMat);
+      rock.position.set(rx, ry + 0.4, rz);
+      var s = 0.8 + Math.random()*1.2;
+      rock.scale.set(s, s*0.8, s);
+      rock.rotation.set(Math.random()*Math.PI, Math.random()*Math.PI, Math.random()*Math.PI);
+      rock.castShadow = true;
+      rock.receiveShadow = true;
+      scene.add(rock);
+
+      // collision radius approximates the rock's horizontal footprint (base
+      // dodecahedron radius 1, scaled by the same horizontal scale factor
+      // used above, with a small margin so collision feels natural against
+      // the visual shape rather than clipping into it)
+      rockColliders.push({ x: rx, z: rz, radius: s * 0.85 });
+    }
+  }
+
+  // resolve a moving circle (player or dummy) against all rock colliders by
+  // pushing it back out along the separation vector whenever it overlaps —
+  // this is what makes rocks solid blocks instead of walk-through decoration
+  function resolveRockCollisions(pos, radius){
+    for(var i=0;i<rockColliders.length;i++){
+      var rock = rockColliders[i];
+      var dx = pos.x - rock.x;
+      var dz = pos.z - rock.z;
+      var dist = Math.sqrt(dx*dx + dz*dz);
+      var minDist = radius + rock.radius;
+      if(dist < minDist && dist > 0.0001){
+        var overlap = minDist - dist;
+        var nx = dx / dist;
+        var nz = dz / dist;
+        pos.x += nx * overlap;
+        pos.z += nz * overlap;
+      } else if(dist <= 0.0001){
+        // exact overlap (rare): push in an arbitrary direction to avoid a stuck NaN state
+        pos.x += radius + rock.radius;
+      }
+    }
+  }
+
+  function getGroundY(x, z){
+    return terrainHeight(x, z);
+  }
+
+  // ---------------------------------------------------------------------
+  // LOW POLY CHARACTER FACTORY (used for player + dummies)
+  // ---------------------------------------------------------------------
+  function buildCharacter(bodyColor, headColor){
+    var group = new THREE.Group();
+
+    var bodyMat = new THREE.MeshStandardMaterial({ color: bodyColor, flatShading:true, roughness:0.7 });
+    var headMat = new THREE.MeshStandardMaterial({ color: headColor, flatShading:true, roughness:0.6 });
+    var limbMat = new THREE.MeshStandardMaterial({ color: bodyColor, flatShading:true, roughness:0.7 });
+
+    // torso (cylinder + sphere caps to fake a capsule shape — r128 has no CapsuleGeometry)
+    var torso = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.42, 0.7, 8), bodyMat);
+    torso.position.y = 1.05;
+    torso.castShadow = true;
+    group.add(torso);
+    var torsoCapTop = new THREE.Mesh(new THREE.SphereGeometry(0.42, 8, 6), bodyMat);
+    torsoCapTop.position.y = 1.4;
+    torsoCapTop.castShadow = true;
+    group.add(torsoCapTop);
+    var torsoCapBottom = new THREE.Mesh(new THREE.SphereGeometry(0.42, 8, 6), bodyMat);
+    torsoCapBottom.position.y = 0.7;
+    torsoCapBottom.castShadow = true;
+    group.add(torsoCapBottom);
+
+    // head
+    var head = new THREE.Mesh(new THREE.IcosahedronGeometry(0.36, 1), headMat);
+    head.position.y = 1.75;
+    head.castShadow = true;
+    group.add(head);
+
+    // eyes (two tiny dark spheres for character)
+    var eyeMat = new THREE.MeshStandardMaterial({ color:0x1a1b2e, flatShading:true });
+    var eyeGeo = new THREE.SphereGeometry(0.05, 6, 6);
+    var eyeL = new THREE.Mesh(eyeGeo, eyeMat);
+    eyeL.position.set(0.14, 1.78, 0.3);
+    group.add(eyeL);
+    var eyeR = eyeL.clone();
+    eyeR.position.x = -0.14;
+    group.add(eyeR);
+
+    // arms (simple rounded cylinders — good enough at low-poly scale)
+    var armGeo = new THREE.CylinderGeometry(0.12, 0.1, 0.6, 6);
+    var armL = new THREE.Mesh(armGeo, limbMat);
+    armL.position.set(0.55, 1.1, 0);
+    armL.rotation.z = 0.25;
+    armL.castShadow = true;
+    group.add(armL);
+    var armR = armL.clone();
+    armR.position.x = -0.55;
+    armR.rotation.z = -0.25;
+    group.add(armR);
+
+    // legs
+    var legGeo = new THREE.CylinderGeometry(0.14, 0.12, 0.6, 6);
+    var legL = new THREE.Mesh(legGeo, limbMat);
+    legL.position.set(0.2, 0.35, 0);
+    legL.castShadow = true;
+    group.add(legL);
+    var legR = legL.clone();
+    legR.position.x = -0.2;
+    group.add(legR);
+
+    group.userData.parts = { torso:torso, torsoCapTop:torsoCapTop, torsoCapBottom:torsoCapBottom, head:head, eyeL:eyeL, eyeR:eyeR, armL:armL, armR:armR, legL:legL, legR:legR };
+
+    return group;
+  }
+
+  // ---------------------------------------------------------------------
+  // PLAYER
+  // ---------------------------------------------------------------------
+  var playerState = {
+    pos: new THREE.Vector3(0, 0, 6),
+    velocity: new THREE.Vector3(0,0,0),
+    facing: 0, // radians, derived from camera yaw (kept for kick/dynamite/model rotation)
+    yaw: 0,    // camera look direction, horizontal
+    pitch: 0,  // camera look direction, vertical (clamped)
+    speed: 6.5,
+    radius: 0.55,
+    eyeHeight: 1.7,
+    // knockback physics (in case player gets caught in own dynamite blast)
+    knockVel: new THREE.Vector3(0,0,0),
+    grounded: true,
+    animT: 0,
+    lastWalkPhase: 0
+  };
+
+  function setupPlayer(){
+    player = buildCharacter(0xff5d5d, 0xffe08a);
+    scene.add(player);
+    // Full body (torso, arms, legs) stays visible at all times — this is exactly
+    // what other players will see over the network later, so we build it right
+    // once and don't special-case it for "self" vs "others".
+    // Only the head is hidden for our own view, since the camera sits at head
+    // height and would otherwise be looking out from inside the head mesh.
+    var parts = player.userData.parts;
+    parts.head.visible = false;
+    parts.eyeL.visible = false;
+    parts.eyeR.visible = false;
+    updatePlayerTransform();
+  }
+
+  function updatePlayerTransform(){
+    var gy = getGroundY(playerState.pos.x, playerState.pos.z);
+    player.position.set(playerState.pos.x, gy, playerState.pos.z);
+    // body faces the same way the camera looks (yaw), so the visible torso/arms/legs
+    // line up naturally with where the player is aiming/walking
+    player.rotation.y = playerState.yaw + Math.PI;
+  }
+
+  // Viewmodel hands removed — camera no longer carries first-person hand meshes.
+
+  // ---------------------------------------------------------------------
+  // NETWORKED PLAY — remote avatars, input streaming, and authoritative
+  // event relay. Host owns dummy physics/dynamite/explosions; every
+  // player (host included) owns and streams its own avatar transform.
+  // ---------------------------------------------------------------------
+  var AVATAR_COLORS = [0xff5d5d, 0x7c5cff, 0x3cc8ff, 0x8ce04c, 0xff8c3c, 0xff5dc4, 0x4ce0c4, 0xffe05d];
+  var remotePlayers = {}; // playerId -> { mesh, tag, pos, yaw, animT, lastWalkPhase }
+  var netTickAccum = 0;
+  var netHostSnapAccum = 0;
+  var NET_SEND_HZ = 15; // avatar-state packets per second is plenty for smooth lerped motion
+  var HOST_SNAPSHOT_HZ = 12;
+
+  function colorForPlayerId(pid){
+    // stable hash of the id so everyone renders the same player in the same color
+    var h = 0;
+    for(var i=0;i<pid.length;i++) h = (h*31 + pid.charCodeAt(i)) >>> 0;
+    return AVATAR_COLORS[h % AVATAR_COLORS.length];
+  }
+
+  function makeRemoteAvatar(pid){
+    var color = colorForPlayerId(pid);
+    var mesh = buildCharacter(color, 0xffe08a);
+    scene.add(mesh);
+
+    var tag = document.createElement('div');
+    tag.className = 'netPlayerTag';
+    var info = Net.state.players[pid];
+    tag.textContent = info ? info.name : ('Игрок ' + Net.shortId(pid));
+    document.getElementById('hud').appendChild(tag);
+
+    return {
+      mesh: mesh,
+      tag: tag,
+      pos: mesh.position.clone(),
+      targetPos: mesh.position.clone(),
+      yaw: 0,
+      targetYaw: 0,
+      animT: 0,
+      lastWalkPhase: 0,
+      walking: false
+    };
+  }
+
+  function removeRemoteAvatar(pid){
+    var r = remotePlayers[pid];
+    if(!r) return;
+    scene.remove(r.mesh);
+    if(r.tag && r.tag.parentNode) r.tag.parentNode.removeChild(r.tag);
+    delete remotePlayers[pid];
+  }
+
+  function applyRemoteAvatarState(pid, s){
+    if(!s) return;
+    var r = remotePlayers[pid];
+    if(!r){
+      r = remotePlayers[pid] = makeRemoteAvatar(pid);
+    }
+    r.targetPos.set(s.x, s.y, s.z);
+    r.targetYaw = s.yaw;
+    r.walking = !!s.walking;
+  }
+
+  function updateRemoteAvatars(dt){
+    for(var pid in remotePlayers){
+      var r = remotePlayers[pid];
+      // smooth (lerp) toward the last received network sample so motion
+      // reads fine even at ~15 updates/sec instead of stepping visibly
+      r.pos.lerp(r.targetPos, Math.min(1, dt*12));
+      var yawDiff = ((r.targetYaw - r.yaw + Math.PI*3) % (Math.PI*2)) - Math.PI;
+      r.yaw += yawDiff * Math.min(1, dt*12);
+
+      r.mesh.position.copy(r.pos);
+      r.mesh.rotation.y = r.yaw + Math.PI;
+
+      var parts = r.mesh.userData.parts;
+      if(r.walking){
+        r.animT += dt * 8;
+        var swing = Math.sin(r.animT) * 0.6;
+        parts.legL.rotation.x = swing;
+        parts.legR.rotation.x = -swing;
+        parts.armL.rotation.x = -swing * 0.8;
+        parts.armR.rotation.x = swing * 0.8;
+      } else {
+        parts.legL.rotation.x = THREE.MathUtils.lerp(parts.legL.rotation.x, 0, 0.2);
+        parts.legR.rotation.x = THREE.MathUtils.lerp(parts.legR.rotation.x, 0, 0.2);
+        parts.armL.rotation.x = THREE.MathUtils.lerp(parts.armL.rotation.x, 0, 0.2);
+        parts.armR.rotation.x = THREE.MathUtils.lerp(parts.armR.rotation.x, 0, 0.2);
+      }
+
+      // project name tag above the head into screen space
+      var headPos = r.pos.clone();
+      headPos.y += 2.05;
+      var screenPos = headPos.project(camera);
+      if(screenPos.z > 1){
+        r.tag.style.display = 'none';
+      } else {
+        r.tag.style.display = 'block';
+        r.tag.style.left = ((screenPos.x*0.5+0.5) * window.innerWidth) + 'px';
+        r.tag.style.top = ((-screenPos.y*0.5+0.5) * window.innerHeight) + 'px';
+      }
+    }
+  }
+
+  function setupNetworkedPlay(){
+    netBadge.classList.add('show');
+    netBadge.textContent = Net.isHost() ? '🌐 ХОСТ · комната ' + Net.state.roomCode : '🌐 ' + Net.state.roomCode;
+
+    // build an avatar immediately for anyone already in the room
+    for(var pid in Net.state.players){
+      if(pid === Net.state.myId) continue;
+      remotePlayers[pid] = makeRemoteAvatar(pid);
+    }
+
+    Net.state.onPlayerListChange = function(players){
+      // roster changed mid-game (someone joined/left) — reconcile avatars
+      for(var id in players){
+        if(id === Net.state.myId) continue;
+        if(!remotePlayers[id]) remotePlayers[id] = makeRemoteAvatar(id);
+      }
+      for(var existing in remotePlayers){
+        if(!players[existing]) removeRemoteAvatar(existing);
+      }
+    };
+
+    if(Net.isHost()){
+      // host receives streamed avatar state directly (relayed by Net) and
+      // guest-originated gameplay events it must re-simulate authoritatively
+      Net.state.onGuestInput = function(pid, msg){
+        applyRemoteAvatarState(pid, msg.state);
+      };
+      Net.state.onRemoteEvent = function(evt){
+        if(evt.t === 'leave'){
+          removeRemoteAvatar(evt.id);
+          return;
+        }
+        if(evt.t === 'event'){
+          handleIncomingGameplayEvent(evt.id, evt.payload, true);
+        }
+      };
+    } else {
+      // guest receives the host's authoritative world snapshot every tick,
+      // plus other players' avatar states relayed through the host, plus
+      // discrete gameplay events (kicks/throws/explosions) to replay locally
+      Net.state.onHostState = function(snapshot){
+        applyHostSnapshot(snapshot);
+      };
+      Net.state.onRemoteEvent = function(evt){
+        if(evt.t === 'peerState'){
+          applyRemoteAvatarState(evt.id, evt.state);
+        } else if(evt.t === 'event'){
+          handleIncomingGameplayEvent(evt.id, evt.payload, false);
+        } else if(evt.t === 'leave'){
+          removeRemoteAvatar(evt.id);
+        }
+      };
+    }
+  }
+
+  // Applies a gameplay event (kick or dynamite throw) that originated on
+  // another machine. isHost=true means WE are the host re-simulating a
+  // guest's action authoritatively before rebroadcasting the outcome;
+  // guests just play back whatever the host already decided.
+  function handleIncomingGameplayEvent(originId, payload, isHost){
+    if(!payload) return;
+    if(payload.t === 'kick'){
+      AudioEngine.playKick(new THREE.Vector3(payload.x, 0, payload.z));
+      if(isHost && dummies[payload.dummyIdx]){
+        applyKickToDummy(dummies[payload.dummyIdx], payload.dx, payload.dz);
+        Net.hostBroadcastEvent({ t:'event', payload:{ t:'kick', dummyIdx: payload.dummyIdx, x: payload.x, z: payload.z, dx: payload.dx, dz: payload.dz } });
+      }
+    } else if(payload.t === 'throw'){
+      if(isHost){
+        var dyn = spawnDynamiteVisual(payload.startX, payload.startZ, payload.targetX, payload.targetZ, false);
+        Net.hostBroadcastEvent({ t:'event', payload:{ t:'throw', startX: payload.startX, startZ: payload.startZ, targetX: payload.targetX, targetZ: payload.targetZ } });
+      } else {
+        // another guest's throw, relayed by the host — play it visually only;
+        // the host's own copy is the one that actually counts down and explodes
+        spawnDynamiteVisual(payload.startX, payload.startZ, payload.targetX, payload.targetZ, true);
+      }
+    } else if(payload.t === 'explode'){
+      // guests replay the host's explosion visuals/sound and drop whichever
+      // local visual-only stick was standing at that spot; real physics
+      // already resolved on the host and flows back via the next snapshot
+      createExplosionVisual(new THREE.Vector3(payload.x, payload.y, payload.z));
+      AudioEngine.playExplosion(new THREE.Vector3(payload.x, payload.y, payload.z));
+      if(!isHost) removeNearestDynamiteVisual(payload.x, payload.z);
+    } else if(payload.t === 'knockback'){
+      // personal impulse addressed to us specifically (we were in blast radius)
+      playerState.knockVel.x += payload.vx;
+      playerState.knockVel.y += payload.vy;
+      playerState.knockVel.z += payload.vz;
+    }
+  }
+
+  // host: periodic authoritative snapshot of everything guests can't
+  // simulate themselves (dummy ragdoll physics + in-flight dynamite)
+  function buildHostSnapshot(){
+    var dummySnap = [];
+    for(var i=0;i<dummies.length;i++){
+      var d = dummies[i];
+      dummySnap.push([d.pos.x, d.pos.y, d.pos.z, d.mesh.rotation.x, d.mesh.rotation.y, d.mesh.rotation.z, d.airborne?1:0]);
+    }
+    var dynSnap = [];
+    for(var j=0;j<dynamites.length;j++){
+      var dyn = dynamites[j];
+      dynSnap.push([dyn.mesh.position.x, dyn.mesh.position.y, dyn.mesh.position.z, dyn.landed?1:0]);
+    }
+    return { dummies: dummySnap, dynamites: dynSnap };
+  }
+
+  function applyHostSnapshot(snap){
+    if(!snap) return;
+    for(var i=0;i<snap.dummies.length && i<dummies.length;i++){
+      var d = dummies[i];
+      var s = snap.dummies[i];
+      d.pos.set(s[0], s[1], s[2]);
+      d.mesh.position.copy(d.pos);
+      d.mesh.rotation.set(s[3], s[4], s[5]);
+      d.airborne = !!s[6];
+    }
+    // guests don't need to track in-flight dynamite meshes precisely frame
+    // by frame (thrown visuals already played locally via events) — the
+    // snapshot's dynamite list is reserved for future spectator-accuracy
+    // needs and intentionally left as a no-op here to keep guest CPU light.
+  }
+
+  // ---------------------------------------------------------------------
+  // NPC DUMMIES (kick test targets)
+  // ---------------------------------------------------------------------
+  function makeDummy(x, z){
+    var mesh = buildCharacter(0xffc93c, 0xf5f5ff);
+    var gy = getGroundY(x, z);
+    mesh.position.set(x, gy, z);
+    scene.add(mesh);
+
+    return {
+      mesh: mesh,
+      pos: new THREE.Vector3(x, gy, z),
+      vel: new THREE.Vector3(0,0,0),
+      radius: 0.55,
+      airborne: false,
+      spinVel: new THREE.Vector3(0,0,0),
+      restTimer: 0
+    };
+  }
+
+  function setupDummies(){
+    var spots = [
+      [3, -2], [-6, 4], [8, 8], [-10, -6], [0, -14]
+    ];
+    for(var i=0;i<spots.length;i++){
+      dummies.push(makeDummy(spots[i][0], spots[i][1]));
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // JOYSTICK INPUT
+  // ---------------------------------------------------------------------
+  var joyZone = document.getElementById('joystickZone');
+  var joyStick = document.getElementById('joyStick');
+  var joyActive = false;
+  var joyTouchId = null;
+  var joyOrigin = {x:0, y:0};
+  var joyVector = {x:0, y:0}; // normalized -1..1
+
+  function setupJoystick(){
+    joyZone.addEventListener('touchstart', onJoyStart, {passive:false});
+    joyZone.addEventListener('touchmove', onJoyMove, {passive:false});
+    joyZone.addEventListener('touchend', onJoyEnd, {passive:false});
+    joyZone.addEventListener('touchcancel', onJoyEnd, {passive:false});
+
+    // mouse fallback for desktop testing
+    joyZone.addEventListener('mousedown', function(e){
+      joyActive = true;
+      var rect = joyZone.getBoundingClientRect();
+      joyOrigin.x = rect.left + rect.width/2;
+      joyOrigin.y = rect.top + rect.height/2;
+      updateJoyFromPoint(e.clientX, e.clientY);
+    });
+    window.addEventListener('mousemove', function(e){
+      if(joyActive) updateJoyFromPoint(e.clientX, e.clientY);
+    });
+    window.addEventListener('mouseup', function(){
+      if(joyActive) resetJoy();
+    });
+  }
+
+  function onJoyStart(e){
+    e.preventDefault();
+    if(joyActive) return;
+    var t = e.changedTouches[0];
+    joyTouchId = t.identifier;
+    joyActive = true;
+    var rect = joyZone.getBoundingClientRect();
+    joyOrigin.x = rect.left + rect.width/2;
+    joyOrigin.y = rect.top + rect.height/2;
+    updateJoyFromPoint(t.clientX, t.clientY);
+  }
+
+  function onJoyMove(e){
+    e.preventDefault();
+    if(!joyActive) return;
+    for(var i=0;i<e.changedTouches.length;i++){
+      var t = e.changedTouches[i];
+      if(t.identifier === joyTouchId){
+        updateJoyFromPoint(t.clientX, t.clientY);
+        break;
+      }
+    }
+  }
+
+  function onJoyEnd(e){
+    e.preventDefault();
+    for(var i=0;i<e.changedTouches.length;i++){
+      if(e.changedTouches[i].identifier === joyTouchId){
+        resetJoy();
+        break;
+      }
+    }
+  }
+
+  function updateJoyFromPoint(px, py){
+    var dx = px - joyOrigin.x;
+    var dy = py - joyOrigin.y;
+    var maxR = 55;
+    var dist = Math.sqrt(dx*dx + dy*dy);
+    if(dist > maxR){
+      dx = dx / dist * maxR;
+      dy = dy / dist * maxR;
+      dist = maxR;
+    }
+    joyStick.style.transform = 'translate(' + dx + 'px,' + dy + 'px)';
+    joyVector.x = dx / maxR;
+    joyVector.y = dy / maxR;
+  }
+
+  function resetJoy(){
+    joyActive = false;
+    joyTouchId = null;
+    joyVector.x = 0;
+    joyVector.y = 0;
+    joyStick.style.transform = 'translate(0,0)';
+  }
+
+  // ---------------------------------------------------------------------
+  // LOOK CONTROL (drag on right side of screen to rotate camera — first person)
+  // ---------------------------------------------------------------------
+  var lookZone = document.getElementById('lookZone');
+  var lookActive = false;
+  var lookTouchId = null;
+  var lookLast = {x:0, y:0};
+  var LOOK_SENSITIVITY_BASE = 0.0022; // tuned so slider's 50% (default) feels natural
+  var PITCH_LIMIT = Math.PI/2 - 0.08;
+
+  function getLookSensitivity(){
+    return LOOK_SENSITIVITY_BASE * (Settings.sensitivity / 50);
+  }
+
+  function setupLookControl(){
+    lookZone.addEventListener('touchstart', onLookStart, {passive:false});
+    lookZone.addEventListener('touchmove', onLookMove, {passive:false});
+    lookZone.addEventListener('touchend', onLookEnd, {passive:false});
+    lookZone.addEventListener('touchcancel', onLookEnd, {passive:false});
+
+    // mouse fallback for desktop testing
+    lookZone.addEventListener('mousedown', function(e){
+      lookActive = true;
+      lookLast.x = e.clientX;
+      lookLast.y = e.clientY;
+    });
+    window.addEventListener('mousemove', function(e){
+      if(!lookActive) return;
+      applyLookDelta(e.clientX - lookLast.x, e.clientY - lookLast.y);
+      lookLast.x = e.clientX;
+      lookLast.y = e.clientY;
+    });
+    window.addEventListener('mouseup', function(){
+      lookActive = false;
+      lookTouchId = null;
+    });
+  }
+
+  function onLookStart(e){
+    e.preventDefault();
+    if(lookActive) return;
+    var t = e.changedTouches[0];
+    lookTouchId = t.identifier;
+    lookActive = true;
+    lookLast.x = t.clientX;
+    lookLast.y = t.clientY;
+  }
+
+  function onLookMove(e){
+    e.preventDefault();
+    if(!lookActive) return;
+    for(var i=0;i<e.changedTouches.length;i++){
+      var t = e.changedTouches[i];
+      if(t.identifier === lookTouchId){
+        applyLookDelta(t.clientX - lookLast.x, t.clientY - lookLast.y);
+        lookLast.x = t.clientX;
+        lookLast.y = t.clientY;
+        break;
+      }
+    }
+  }
+
+  function onLookEnd(e){
+    e.preventDefault();
+    for(var i=0;i<e.changedTouches.length;i++){
+      if(e.changedTouches[i].identifier === lookTouchId){
+        lookActive = false;
+        lookTouchId = null;
+        break;
+      }
+    }
+  }
+
+  function applyLookDelta(dx, dy){
+    var sens = getLookSensitivity();
+    playerState.yaw -= dx * sens;
+    playerState.pitch -= dy * sens;
+    playerState.pitch = THREE.MathUtils.clamp(playerState.pitch, -PITCH_LIMIT, PITCH_LIMIT);
+    playerState.facing = playerState.yaw;
+  }
+
+  // ---------------------------------------------------------------------
+  // KICK MECHANIC
+  // ---------------------------------------------------------------------
+  var kickBtn = document.getElementById('kickBtn');
+  var proximityHint = document.getElementById('proximityHint');
+  // slightly larger than the base reach to compensate for the camera's
+  // forward offset (see CAMERA_FORWARD_OFFSET) — the camera sits ahead of
+  // the player's actual collision point, so without this the dummy looks
+  // within kicking distance well before doKick()'s real distance check agrees
+  var KICK_RANGE = 1.95;
+  var kickCooldown = 0;
+  var nearestDummy = null;
+
+  function setupKickButton(){
+    kickBtn.addEventListener('touchstart', function(e){
+      e.preventDefault();
+      doKick();
+    }, {passive:false});
+    kickBtn.addEventListener('click', function(e){
+      doKick();
+    });
+  }
+
+  function updateKickAvailability(){
+    nearestDummy = null;
+    var best = KICK_RANGE;
+    for(var i=0;i<dummies.length;i++){
+      var d = dummies[i];
+      if(d.airborne) continue;
+      var dist = Math.sqrt(
+        Math.pow(d.pos.x - playerState.pos.x, 2) +
+        Math.pow(d.pos.z - playerState.pos.z, 2)
+      );
+      if(dist < best){
+        best = dist;
+        nearestDummy = d;
+      }
+    }
+
+    var available = (nearestDummy !== null) && kickCooldown <= 0;
+    if(available){
+      kickBtn.classList.remove('disabled');
+      proximityHint.classList.add('show');
+    } else {
+      kickBtn.classList.add('disabled');
+      proximityHint.classList.remove('show');
+    }
+  }
+
+  function applyKickToDummy(d, dx, dz){
+    var KICK_FORCE = 13;
+    var KICK_UP = 7;
+    d.vel.set(dx * KICK_FORCE, KICK_UP, dz * KICK_FORCE);
+    d.spinVel.set((Math.random()-0.5)*14, (Math.random()-0.5)*14, (Math.random()-0.5)*14);
+    d.airborne = true;
+  }
+
+  function doKick(){
+    if(!nearestDummy || kickCooldown > 0) return;
+
+    var d = nearestDummy;
+    // direction from player to dummy (horizontal)
+    var dx = d.pos.x - playerState.pos.x;
+    var dz = d.pos.z - playerState.pos.z;
+    var len = Math.sqrt(dx*dx + dz*dz) || 1;
+    dx /= len; dz /= len;
+
+    if(Net.isMultiplayer() && !Net.isHost()){
+      // guest: don't touch physics locally (host owns dummy state and will
+      // reflect the real outcome in its next snapshot) — just send the
+      // action and play the impact sound immediately so input still feels responsive
+      var idx = dummies.indexOf(d);
+      Net.guestSendEvent({ t:'kick', dummyIdx: idx, x: d.pos.x, z: d.pos.z, dx: dx, dz: dz });
+      AudioEngine.playKick(d.pos);
+    } else {
+      applyKickToDummy(d, dx, dz);
+      AudioEngine.playKick(d.pos);
+      if(Net.isMultiplayer() && Net.isHost()){
+        var hostIdx = dummies.indexOf(d);
+        Net.hostBroadcastEvent({ t:'event', payload:{ t:'kick', dummyIdx: hostIdx, x: d.pos.x, z: d.pos.z, dx: dx, dz: dz } });
+      }
+    }
+
+    // player faces the kick direction + tiny lunge animation via quick forward nudge
+    playerState.facing = Math.atan2(dx, dz);
+    playerState.velocity.x += dx * 1.5;
+    playerState.velocity.z += dz * 1.5;
+
+    // button squash feedback (CSS already handles :active, add extra pulse)
+    kickBtn.style.transform = 'scale(0.85)';
+    setTimeout(function(){ kickBtn.style.transform = ''; }, 120);
+
+    kickCooldown = 0.5;
+  }
+
+  function updateDummyPhysics(dt){
+    var GRAVITY = -18;
+    for(var i=0;i<dummies.length;i++){
+      var d = dummies[i];
+      if(!d.airborne){
+        // gentle idle bob handled in animate() via mesh rotation only
+        continue;
+      }
+
+      d.vel.y += GRAVITY * dt;
+      d.pos.x += d.vel.x * dt;
+      d.pos.y += d.vel.y * dt;
+      d.pos.z += d.vel.z * dt;
+
+      // air drag
+      d.vel.x *= 0.995;
+      d.vel.z *= 0.995;
+
+      // spin while airborne (tumbling ragdoll-ish feel)
+      d.mesh.rotation.x += d.spinVel.x * dt;
+      d.mesh.rotation.y += d.spinVel.y * dt;
+      d.mesh.rotation.z += d.spinVel.z * dt;
+
+      // solid rocks: bounce dummies off instead of letting them fly through
+      var beforeX = d.pos.x, beforeZ = d.pos.z;
+      resolveRockCollisions(d.pos, d.radius);
+      if(d.pos.x !== beforeX || d.pos.z !== beforeZ){
+        // reflect horizontal velocity off the push-out direction so it reads
+        // as a bump, not a dead stop
+        d.vel.x *= -0.4;
+        d.vel.z *= -0.4;
+      }
+
+      var groundY = getGroundY(d.pos.x, d.pos.z);
+      if(d.pos.y <= groundY){
+        d.pos.y = groundY;
+        if(Math.abs(d.vel.y) > 1.5){
+          // bounce with energy loss
+          d.vel.y *= -0.35;
+          d.vel.x *= 0.6;
+          d.vel.z *= 0.6;
+        } else {
+          // settle
+          d.vel.set(0,0,0);
+          d.spinVel.multiplyScalar(0.8);
+          if(d.spinVel.length() < 0.05){
+            d.airborne = false;
+            d.mesh.rotation.set(0,0,0);
+          }
+        }
+      }
+
+      d.mesh.position.copy(d.pos);
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // DYNAMITE MECHANIC
+  // ---------------------------------------------------------------------
+  var dynamiteBtn = document.getElementById('dynamiteBtn');
+  var DYNAMITE_FUSE = 5.0;
+  var EXPLOSION_RADIUS = 8;
+  var dynamiteCooldown = 0;
+  var DYNAMITE_COOLDOWN_TIME = 1.5;
+
+  function setupDynamiteButton(){
+    dynamiteBtn.addEventListener('touchstart', function(e){
+      e.preventDefault();
+      throwDynamite();
+    }, {passive:false});
+    dynamiteBtn.addEventListener('click', function(){
+      throwDynamite();
+    });
+  }
+
+  function spawnDynamiteVisual(startX, startZ, targetX, targetZ, visualOnly){
+    // stick shape: cylinder body + small fuse
+    var group = new THREE.Group();
+    var bodyMat = new THREE.MeshStandardMaterial({ color:0xcc2222, flatShading:true, roughness:0.6 });
+    var body = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.14, 0.5, 10), bodyMat);
+    body.castShadow = true;
+    group.add(body);
+    var capMat = new THREE.MeshStandardMaterial({ color:0x333333, flatShading:true });
+    var capTop = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.12, 8), capMat);
+    capTop.position.y = 0.31;
+    group.add(capTop);
+
+    var startY = getGroundY(startX, startZ) + 1.4;
+    var targetY = getGroundY(targetX, targetZ);
+
+    group.position.set(startX, startY, startZ);
+    scene.add(group);
+
+    var dyn = {
+      mesh: group,
+      startPos: new THREE.Vector3(startX, startY, startZ),
+      targetPos: new THREE.Vector3(targetX, targetY, targetZ),
+      flightTime: 0.7,
+      t: 0,
+      landed: false,
+      fuse: DYNAMITE_FUSE,
+      exploded: false,
+      lastTickSecond: Math.ceil(DYNAMITE_FUSE),
+      // visualOnly dynamite belongs to a remote throw a guest is replaying
+      // for its own screen — it flies and lands, but only the host's copy
+      // of this same throw ever actually counts down and explodes, so we
+      // simply stop updating (and fade out) a visual-only stick once it lands
+      visualOnly: !!visualOnly
+    };
+    dynamites.push(dyn);
+
+    AudioEngine.playThrow(dyn.startPos);
+    return dyn;
+  }
+
+  function throwDynamite(){
+    if(dynamiteCooldown > 0) return;
+    dynamiteCooldown = DYNAMITE_COOLDOWN_TIME;
+
+    dynamiteBtn.style.transform = 'scale(0.85)';
+    setTimeout(function(){ dynamiteBtn.style.transform = ''; }, 120);
+
+    // throw arc: from camera look direction (yaw), land ~7 units ahead
+    var throwDist = 7;
+    var startX = playerState.pos.x;
+    var startZ = playerState.pos.z;
+    var dirX = -Math.sin(playerState.yaw);
+    var dirZ = -Math.cos(playerState.yaw);
+    var targetX = startX + dirX * throwDist;
+    var targetZ = startZ + dirZ * throwDist;
+
+    if(Net.isMultiplayer() && !Net.isHost()){
+      // guest: play the throw locally right away (feels instant), but this
+      // copy is visual-only — the host owns the real fuse/explosion timer
+      // for its own copy of the same throw and will broadcast the actual boom
+      spawnDynamiteVisual(startX, startZ, targetX, targetZ, true);
+      Net.guestSendEvent({ t:'throw', startX: startX, startZ: startZ, targetX: targetX, targetZ: targetZ });
+    } else {
+      var dyn = spawnDynamiteVisual(startX, startZ, targetX, targetZ, false);
+      if(Net.isMultiplayer() && Net.isHost()){
+        Net.hostBroadcastEvent({ t:'event', payload:{ t:'throw', startX: startX, startZ: startZ, targetX: targetX, targetZ: targetZ } });
+      }
+    }
+  }
+
+  function updateDynamite(dt){
+    for(var i = dynamites.length - 1; i >= 0; i--){
+      var d = dynamites[i];
+
+      if(!d.landed){
+        d.t += dt;
+        var progress = Math.min(d.t / d.flightTime, 1);
+        // parabolic arc
+        var x = THREE.MathUtils.lerp(d.startPos.x, d.targetPos.x, progress);
+        var z = THREE.MathUtils.lerp(d.startPos.z, d.targetPos.z, progress);
+        var baseY = THREE.MathUtils.lerp(d.startPos.y, d.targetPos.y, progress);
+        var arc = Math.sin(progress * Math.PI) * 2.5;
+        d.mesh.position.set(x, baseY + arc, z);
+        d.mesh.rotation.x += dt * 10;
+        d.mesh.rotation.z += dt * 6;
+
+        if(progress >= 1){
+          d.landed = true;
+          d.mesh.position.copy(d.targetPos);
+          d.mesh.rotation.set(0,0,0);
+          // lay it on its side once landed
+          d.mesh.rotation.z = Math.PI/2;
+        }
+      } else if(d.visualOnly){
+        // guest's local replay of someone else's throw: no timer of its own,
+        // it just sits until the host's real explosion event removes it
+        continue;
+      } else if(!d.exploded){
+        d.fuse -= dt;
+
+        // blinking urgency pulse in last 1.5s (simple scale pulse)
+        if(d.fuse < 1.5){
+          var pulse = 1 + Math.sin(performance.now() * 0.03) * 0.15;
+          d.mesh.scale.set(pulse, pulse, pulse);
+        }
+
+        // fuse tick sound once per remaining second, positional at the stick's location
+        var currentSecond = Math.ceil(d.fuse);
+        if(currentSecond < d.lastTickSecond && currentSecond >= 0){
+          AudioEngine.playFuseTick(d.mesh.position);
+          d.lastTickSecond = currentSecond;
+        }
+
+        if(d.fuse <= 0){
+          explodeDynamite(d);
+        }
+      }
+    }
+  }
+
+  // removes whichever locally-tracked dynamite mesh is nearest the given
+  // point — used when a remote 'explode' event arrives and we just need to
+  // clear the corresponding visual-only stick (guest side)
+  function removeNearestDynamiteVisual(x, z){
+    var best = null, bestDist = 2.5;
+    for(var i=0;i<dynamites.length;i++){
+      var d = dynamites[i];
+      var dist = Math.sqrt(Math.pow(d.mesh.position.x-x,2) + Math.pow(d.mesh.position.z-z,2));
+      if(dist < bestDist){ bestDist = dist; best = d; }
+    }
+    if(best){
+      scene.remove(best.mesh);
+      var idx = dynamites.indexOf(best);
+      if(idx >= 0) dynamites.splice(idx, 1);
+    }
+  }
+
+  function explodeDynamite(d){
+    d.exploded = true;
+    scene.remove(d.mesh);
+
+    var center = d.landed ? d.targetPos : d.mesh.position;
+
+    createExplosionVisual(center);
+    AudioEngine.playExplosion(center);
+
+    // knockback on dummies (host/solo authoritative physics)
+    for(var i=0;i<dummies.length;i++){
+      applyExplosionForce(dummies[i].pos, function(vel, spin){
+        dummies[i].vel.add(vel);
+        dummies[i].spinVel.add(spin);
+        dummies[i].airborne = true;
+      }, center);
+    }
+
+    // knockback on our own local player
+    applyExplosionForce(playerState.pos, function(vel, spin){
+      playerState.knockVel.add(vel);
+    }, center);
+
+    if(Net.isMultiplayer() && Net.isHost()){
+      // tell every guest to play the explosion visuals/sound, and separately
+      // tell any guest actually caught in the blast radius their personal
+      // knockback vector (each guest applies that to its own local physics)
+      Net.hostBroadcastEvent({ t:'event', payload:{ t:'explode', x: center.x, y: center.y, z: center.z } });
+      for(var pid in remotePlayers){
+        var r = remotePlayers[pid];
+        applyExplosionForce(r.pos, function(vel, spin){
+          var conn = Net.state.conns[pid];
+          if(conn && conn.open){
+            conn.send({ t:'event', id: Net.state.myId, payload:{ t:'knockback', vx: vel.x, vy: vel.y, vz: vel.z } });
+          }
+        }, center);
+      }
+    }
+
+    // remove from active list
+    var idx = dynamites.indexOf(d);
+    if(idx >= 0) dynamites.splice(idx, 1);
+  }
+
+  function applyExplosionForce(targetPos, applyFn, center){
+    var dx = targetPos.x - center.x;
+    var dz = targetPos.z - center.z;
+    var dist = Math.sqrt(dx*dx + dz*dz);
+    if(dist > EXPLOSION_RADIUS) return;
+
+    var falloff = 1 - (dist / EXPLOSION_RADIUS);
+    var force = 16 * falloff + 3;
+    var upForce = 9 * falloff + 3;
+
+    var nx = dist > 0.01 ? dx/dist : (Math.random()-0.5);
+    var nz = dist > 0.01 ? dz/dist : (Math.random()-0.5);
+
+    var vel = new THREE.Vector3(nx * force, upForce, nz * force);
+    var spin = new THREE.Vector3((Math.random()-0.5)*16, (Math.random()-0.5)*16, (Math.random()-0.5)*16);
+    applyFn(vel, spin);
+  }
+
+  function createExplosionVisual(center){
+    // expanding sphere shockwave + particle shards, pure three.js, cleaned up over time
+    var groundY = getGroundY(center.x, center.z);
+    var flashGeo = new THREE.SphereGeometry(0.5, 12, 12);
+    var flashMat = new THREE.MeshBasicMaterial({ color:0xffc93c, transparent:true, opacity:0.9 });
+    var flash = new THREE.Mesh(flashGeo, flashMat);
+    flash.position.set(center.x, groundY + 1, center.z);
+    scene.add(flash);
+
+    var particles = [];
+    var particleCount = 18;
+    var particleGeo = new THREE.TetrahedronGeometry(0.25, 0);
+    for(var i=0;i<particleCount;i++){
+      var pMat = new THREE.MeshStandardMaterial({
+        color: Math.random() > 0.5 ? 0xff5d5d : 0xffc93c,
+        flatShading:true
+      });
+      var p = new THREE.Mesh(particleGeo, pMat);
+      p.position.set(center.x, groundY + 1, center.z);
+      var ang = Math.random() * Math.PI * 2;
+      var speed = 4 + Math.random()*6;
+      var upSpeed = 4 + Math.random()*6;
+      p.userData.vel = new THREE.Vector3(
+        Math.cos(ang) * speed,
+        upSpeed,
+        Math.sin(ang) * speed
+      );
+      scene.add(p);
+      particles.push(p);
+    }
+
+    explosionEffects.push({
+      flash: flash,
+      particles: particles,
+      age: 0,
+      maxAge: 1.1
+    });
+  }
+
+  function updateExplosionEffects(dt){
+    var GRAVITY = -18;
+    for(var i = explosionEffects.length - 1; i >= 0; i--){
+      var fx = explosionEffects[i];
+      fx.age += dt;
+      var t = fx.age / fx.maxAge;
+
+      if(fx.flash){
+        var s = 1 + t * 14;
+        fx.flash.scale.set(s, s, s);
+        fx.flash.material.opacity = Math.max(0, 0.9 * (1 - t*1.3));
+        if(t >= 1){
+          scene.remove(fx.flash);
+          fx.flash = null;
+        }
+      }
+
+      for(var j=0;j<fx.particles.length;j++){
+        var p = fx.particles[j];
+        p.userData.vel.y += GRAVITY * dt;
+        p.position.x += p.userData.vel.x * dt;
+        p.position.y += p.userData.vel.y * dt;
+        p.position.z += p.userData.vel.z * dt;
+        p.rotation.x += dt * 8;
+        p.rotation.y += dt * 6;
+        if(p.material.opacity === undefined) p.material.transparent = true;
+        p.material.opacity = Math.max(0, 1 - t);
+      }
+
+      if(t >= 1){
+        for(var k=0;k<fx.particles.length;k++){
+          scene.remove(fx.particles[k]);
+        }
+        explosionEffects.splice(i, 1);
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // MAIN UPDATE LOOP
+  // ---------------------------------------------------------------------
+  function updatePlayerMovement(dt){
+    var moveX = joyVector.x;
+    var moveZ = joyVector.y; // stick forward (up) is negative y
+
+    var mag = Math.sqrt(moveX*moveX + moveZ*moveZ);
+    if(mag > 0.15){
+      // camera-relative movement: stick up = walk toward where camera looks (yaw only)
+      // three.js camera with rotation.y = yaw looks toward (-sin(yaw), -cos(yaw)) at pitch 0
+      var yaw = playerState.yaw;
+      var forwardX = -Math.sin(yaw);
+      var forwardZ = -Math.cos(yaw);
+      var rightX = -Math.sin(yaw - Math.PI/2);
+      var rightZ = -Math.cos(yaw - Math.PI/2);
+
+      // stick.y negative = pushed up/forward
+      var fwdAmt = -moveZ;
+      var strafeAmt = moveX;
+
+      var dirX = forwardX * fwdAmt + rightX * strafeAmt;
+      var dirZ = forwardZ * fwdAmt + rightZ * strafeAmt;
+      var dirLen = Math.sqrt(dirX*dirX + dirZ*dirZ) || 1;
+      dirX /= dirLen; dirZ /= dirLen;
+
+      var speed = playerState.speed * Math.min(mag, 1);
+      playerState.velocity.x = dirX * speed;
+      playerState.velocity.z = dirZ * speed;
+      playerState.animT += dt * 8 * Math.min(mag,1);
+
+      // footstep sound: fire once per half walk-cycle (each foot landing).
+      // Footsteps are the player's own body sound, so always full volume —
+      // no positional falloff applies here.
+      var walkPhase = playerState.animT % Math.PI;
+      if(walkPhase < playerState.lastWalkPhase){
+        AudioEngine.playFootstep();
+      }
+      playerState.lastWalkPhase = walkPhase;
+    } else {
+      playerState.velocity.x *= 0.8;
+      playerState.velocity.z *= 0.8;
+    }
+
+    // apply knockback (from explosions) on top of walk velocity
+    playerState.pos.x += (playerState.velocity.x + playerState.knockVel.x) * dt;
+    playerState.pos.z += (playerState.velocity.z + playerState.knockVel.z) * dt;
+
+    // decay knockback
+    playerState.knockVel.multiplyScalar(0.9);
+
+    // solid rocks: push the player back out if walking into one
+    resolveRockCollisions(playerState.pos, playerState.radius);
+
+    // clamp inside world bounds
+    var half = WORLD_SIZE/2 - 2;
+    playerState.pos.x = THREE.MathUtils.clamp(playerState.pos.x, -half, half);
+    playerState.pos.z = THREE.MathUtils.clamp(playerState.pos.z, -half, half);
+
+    updatePlayerTransform();
+
+    // simple walk-cycle animation on visible limbs — glancing down while walking
+    // shows arms/legs swinging, only the head stays hidden (see setupPlayer)
+    var parts = player.userData.parts;
+    var walking = mag > 0.15;
+    if(walking){
+      var swing = Math.sin(playerState.animT) * 0.6;
+      parts.legL.rotation.x = swing;
+      parts.legR.rotation.x = -swing;
+      parts.armL.rotation.x = -swing * 0.8;
+      parts.armR.rotation.x = swing * 0.8;
+    } else {
+      parts.legL.rotation.x = THREE.MathUtils.lerp(parts.legL.rotation.x, 0, 0.2);
+      parts.legR.rotation.x = THREE.MathUtils.lerp(parts.legR.rotation.x, 0, 0.2);
+      parts.armL.rotation.x = THREE.MathUtils.lerp(parts.armL.rotation.x, 0, 0.2);
+      parts.armR.rotation.x = THREE.MathUtils.lerp(parts.armR.rotation.x, 0, 0.2);
+    }
+
+  }
+
+  // small forward offset so the camera sits slightly ahead of the body's
+  // pivot point, keeping the torso/arms/legs out of view under normal look angles
+  var CAMERA_FORWARD_OFFSET = 0.35;
+
+  function updateCamera(dt){
+    // first-person: camera sits at eye height, rotates with yaw/pitch from look control
+    var gy = getGroundY(playerState.pos.x, playerState.pos.z);
+    var forwardX = -Math.sin(playerState.yaw) * CAMERA_FORWARD_OFFSET;
+    var forwardZ = -Math.cos(playerState.yaw) * CAMERA_FORWARD_OFFSET;
+    camera.position.set(playerState.pos.x + forwardX, gy + playerState.eyeHeight, playerState.pos.z + forwardZ);
+
+    camera.rotation.order = 'YXZ';
+    camera.rotation.y = playerState.yaw;
+    camera.rotation.x = playerState.pitch;
+    camera.rotation.z = 0;
+  }
+
+  function animate(){
+    requestAnimationFrame(animate);
+    var dt = Math.min(clock.getDelta(), 0.05);
+
+    updatePlayerMovement(dt);
+    updateCamera(dt);
+
+    // dummy ragdoll physics only runs where it's authoritative: solo play
+    // or the host. Guests just render whatever the host's snapshot says.
+    if(!Net.isMultiplayer() || Net.isHost()){
+      updateDummyPhysics(dt);
+    }
+    updateDynamite(dt);
+    updateExplosionEffects(dt);
+
+    if(Net.isMultiplayer()){
+      updateRemoteAvatars(dt);
+      netTickAccum += dt;
+      var sendInterval = 1 / NET_SEND_HZ;
+      if(netTickAccum >= sendInterval){
+        netTickAccum = 0;
+        var myMag = Math.sqrt(joyVector.x*joyVector.x + joyVector.y*joyVector.y);
+        var outState = {
+          x: playerState.pos.x, y: playerState.pos.y, z: playerState.pos.z,
+          yaw: playerState.yaw, walking: myMag > 0.15
+        };
+        if(Net.isHost()){
+          // the host doesn't send itself an 'input' packet — it just folds
+          // its own avatar into the snapshot broadcast below
+        } else {
+          Net.guestSendInput(outState);
+        }
+      }
+      if(Net.isHost()){
+        netHostSnapAccum += dt;
+        var snapInterval = 1 / HOST_SNAPSHOT_HZ;
+        if(netHostSnapAccum >= snapInterval){
+          netHostSnapAccum = 0;
+          Net.hostBroadcastSnapshot(buildHostSnapshot());
+        }
+      }
+    }
+
+    if(kickCooldown > 0) kickCooldown -= dt;
+    if(dynamiteCooldown > 0){
+      dynamiteCooldown -= dt;
+      if(dynamiteCooldown <= 0){
+        dynamiteBtn.classList.remove('disabled');
+      }
+    } else {
+      dynamiteBtn.classList.remove('disabled');
+    }
+    if(dynamiteCooldown > 0){
+      dynamiteBtn.classList.add('disabled');
+    }
+
+    updateKickAvailability();
+
+    renderer.render(scene, camera);
+  }
+
+})();
+</script>
+</body>
+</html>
