@@ -373,7 +373,25 @@
     white-space:nowrap;
   }
   #netDiagLog{
-    display:none !important;
+    position:fixed;
+    left:12px;
+    right:12px;
+    bottom:max(12px, env(safe-area-inset-bottom));
+    max-height:32vh;
+    overflow-y:auto;
+    background:rgba(10,10,20,0.88);
+    color:#9ef7c1;
+    font:11px/1.4 monospace;
+    padding:8px 10px;
+    border-radius:10px;
+    border:1px solid rgba(255,255,255,0.15);
+    white-space:pre-wrap;
+    word-break:break-word;
+    z-index:9999;
+    pointer-events:none;
+  }
+  #netDiagLog:empty{
+    display:none;
   }
 
   /* Joystick */
@@ -2192,6 +2210,10 @@
     canvas.height = 160;
     var ctx = canvas.getContext('2d');
 
+    ctx.save();
+    ctx.translate(canvas.width, 0);
+    ctx.scale(-1, 1);
+
     // rounded card background
     ctx.fillStyle = 'rgba(26,27,46,0.92)';
     roundRectPath(ctx, 4, 4, canvas.width-8, canvas.height-8, 22);
@@ -2209,6 +2231,7 @@
     ctx.fillStyle = '#e8e4ff';
     ctx.font = '30px Arial, sans-serif';
     ctx.fillText(subtitle, canvas.width/2, 116);
+    ctx.restore();
 
     var texture = new THREE.CanvasTexture(canvas);
     texture.needsUpdate = true;
