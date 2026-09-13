@@ -1703,7 +1703,7 @@
   var dynamites = []; // active thrown dynamite objects
   var explosionEffects = [];
 
-  var WORLD_SIZE = 90;
+  var WORLD_SIZE = 160;
 
   function initGame(){
     scene = new THREE.Scene();
@@ -1717,13 +1717,14 @@
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.shadowMap.type = THREE.BasicShadowMap;
 
     clock = new THREE.Clock();
 
     setupLights();
     setupGround();
     setupPlayer();
+    setupPathAndLocker();
     setupDummies();
     updateCamera(0);
 
@@ -1758,8 +1759,8 @@
     var sun = new THREE.DirectionalLight(0xfff3d6, 1.15);
     sun.position.set(30, 45, 20);
     sun.castShadow = true;
-    sun.shadow.mapSize.width = 2048;
-    sun.shadow.mapSize.height = 2048;
+    sun.shadow.mapSize.width = 512;
+    sun.shadow.mapSize.height = 512;
     sun.shadow.camera.left = -60;
     sun.shadow.camera.right = 60;
     sun.shadow.camera.top = 60;
@@ -1775,15 +1776,52 @@
   }
 
   // ---------------------------------------------------------------------
+  // PATH + LOCKER ROOM layout constants
+  // ---------------------------------------------------------------------
+  // Main path runs along +Z from the spawn point straight into the open
+  // field. A side branch forks off it and dead-ends into an enclosed
+  // locker room; a second short connector leads back out of the locker
+  // room onto the main path further along, so walking through the room
+  // naturally returns the player to the field instead of backtracking.
+  var PATH_WIDTH = 4.4;
+  var PATH_Y = 0.02; // sits just above the terrain to avoid z-fighting
+
+  var LOCKER = {
+    // fork point on the main path where the side branch begins
+    forkZ: 14,
+    // side branch goes off to -X, entering the room through its east wall
+    branchX0: 0,
+    branchX1: -24,
+    branchZ: 14,
+    // room bounds (world space)
+    roomMinX: -40, roomMaxX: -24,
+    roomMinZ: 6,  roomMaxZ: 26,
+    wallHeight: 3.2,
+    wallThickness: 0.4,
+    // exit connector: short path from a gap in the room's north wall back
+    // out to a point further along the main path, so walking the room's
+    // length (east entrance to north exit) naturally continues the journey
+    exitRoomX: -32,
+    exitRoomZ: 26,
+    exitMainZ: 26
+  };
+
+  var lockerZoneBounds = {
+    minX: LOCKER.roomMinX, maxX: LOCKER.roomMaxX,
+    minZ: LOCKER.roomMinZ, maxZ: LOCKER.roomMaxZ
+  };
+
+  function isInLockerRoom(x, z){
+    return x >= lockerZoneBounds.minX && x <= lockerZoneBounds.maxX &&
+           z >= lockerZoneBounds.minZ && z <= lockerZoneBounds.maxZ;
+  }
+
+  // ---------------------------------------------------------------------
   // GROUND — low poly hilly terrain
   // ---------------------------------------------------------------------
   function terrainHeight(x, z){
-    // smooth layered noise-ish hills using sines (deterministic, no libs needed)
-    return (
-      Math.sin(x*0.09) * Math.cos(z*0.07) * 2.2 +
-      Math.sin(x*0.19 + 1.7) * Math.cos(z*0.23) * 1.1 +
-      Math.sin((x+z)*0.05) * 1.4
-    );
+    // flat map — no hills
+    return 0;
   }
 
   function setupGround(){
@@ -1823,31 +1861,384 @@
     groundMesh.receiveShadow = true;
     scene.add(groundMesh);
 
-    // simple boundary wall ring markers (low poly rocks) so player senses edges —
-    // these are solid: player and dummies collide with them instead of passing through
-    var rockGeo = new THREE.DodecahedronGeometry(1, 0);
-    var rockMat = new THREE.MeshStandardMaterial({ color:0x7d7d7d, flatShading:true, roughness:1 });
-    var ringCount = 28;
-    for(var k=0;k<ringCount;k++){
-      var ang = (k/ringCount) * Math.PI * 2;
-      var rx = Math.cos(ang) * (WORLD_SIZE/2 - 2);
-      var rz = Math.sin(ang) * (WORLD_SIZE/2 - 2);
-      var ry = terrainHeight(rx, rz);
-      var rock = new THREE.Mesh(rockGeo, rockMat);
-      rock.position.set(rx, ry + 0.4, rz);
-      var s = 0.8 + Math.random()*1.2;
-      rock.scale.set(s, s*0.8, s);
-      rock.rotation.set(Math.random()*Math.PI, Math.random()*Math.PI, Math.random()*Math.PI);
-      rock.castShadow = true;
-      rock.receiveShadow = true;
-      scene.add(rock);
+    // rocks removed — flat, open map with no boundary markers or colliders
+  }
 
-      // collision radius approximates the rock's horizontal footprint (base
-      // dodecahedron radius 1, scaled by the same horizontal scale factor
-      // used above, with a small margin so collision feels natural against
-      // the visual shape rather than clipping into it)
-      rockColliders.push({ x: rx, z: rz, radius: s * 0.85 });
+  // ---------------------------------------------------------------------
+  // PATH — flat low-poly white strip from spawn to the field, with a
+  // signposted fork leading into the locker room.
+  // ---------------------------------------------------------------------
+  function addPathSegment(x0, z0, x1, z1, width){
+    var dx = x1 - x0, dz = z1 - z0;
+    var len = Math.sqrt(dx*dx + dz*dz);
+    var angle = Math.atan2(dx, dz); // rotation around Y so the strip's length axis follows (x1,z1)-(x0,z0)
+
+    var geo = new THREE.PlaneGeometry(width, len, 1, 1);
+    geo.rotateX(-Math.PI/2);
+    var mat = new THREE.MeshStandardMaterial({ color:0xf5f5ff, flatShading:true, roughness:0.9 });
+    var strip = new THREE.Mesh(geo, mat);
+    strip.position.set((x0+x1)/2, PATH_Y, (z0+z1)/2);
+    strip.rotation.y = angle;
+    strip.receiveShadow = true;
+    scene.add(strip);
+    return strip;
+  }
+
+  function setupPathAndLocker(){
+    // main path: straight strip from just behind spawn out into the field,
+    // running through the fork point so the branch reads as a clear
+    // T-junction rather than a separate disconnected strip.
+    addPathSegment(0, -2, 0, 60, PATH_WIDTH);
+
+    // branch: fork off the main path, heading to -X into the locker room entrance
+    addPathSegment(LOCKER.branchX0, LOCKER.branchZ, LOCKER.branchX1, LOCKER.branchZ, PATH_WIDTH);
+
+    // exit connector: short path from the room's far corner back onto the main path
+    addPathSegment(LOCKER.exitRoomX, LOCKER.exitRoomZ, 0, LOCKER.exitMainZ, PATH_WIDTH);
+
+    setupLockerRoom();
+  }
+
+  // ---------------------------------------------------------------------
+  // LOCKER ROOM — enclosed area with colored podiums and a mannequin that
+  // mirrors the player's current color (a static stand-in model, since a
+  // real camera-based mirror isn't used here).
+  // ---------------------------------------------------------------------
+  var lockerColliders = []; // wall segments: {x, z, halfW, halfD} axis-aligned boxes
+  var lockerPodiums = []; // {x, z, radius, color}
+  var lockerMannequin = null; // full-body copy of the player, recolored whenever the player is
+
+  var PODIUM_COLORS = [0xff5d5d, 0x7c5cff, 0xffc93c, 0x3ddc97, 0x3cc8ff, 0xff8c3c, 0xff5dc4, 0x8ce04c];
+
+  function addLockerWall(cx, cz, halfW, halfD, wallMat){
+    var h = LOCKER.wallHeight;
+    var geo = new THREE.BoxGeometry(halfW*2, h, halfD*2);
+    var wall = new THREE.Mesh(geo, wallMat);
+    wall.position.set(cx, h/2, cz);
+    wall.castShadow = true;
+    wall.receiveShadow = true;
+    scene.add(wall);
+    lockerColliders.push({ x:cx, z:cz, halfW:halfW + 0.3, halfD:halfD + 0.3 });
+    return wall;
+  }
+
+  function setupLockerRoom(){
+    var t = LOCKER.wallThickness;
+    var minX = LOCKER.roomMinX, maxX = LOCKER.roomMaxX;
+    var minZ = LOCKER.roomMinZ, maxZ = LOCKER.roomMaxZ;
+    var cxAll = (minX+maxX)/2, czAll = (minZ+maxZ)/2;
+    var halfWAll = (maxX-minX)/2, halfDAll = (maxZ-minZ)/2;
+
+    var wallMat = new THREE.MeshStandardMaterial({ color:0xe8e4ff, flatShading:true, roughness:0.85 });
+    var trimMat = new THREE.MeshStandardMaterial({ color:0x6a5acd, flatShading:true, roughness:0.6 });
+
+    // floor for the room (slightly raised, distinct pale color so the
+    // enclosed area reads visually different from the outside field) —
+    // two-tone checker-ish look via a soft accent stripe down the middle
+    var floorGeo = new THREE.PlaneGeometry(halfWAll*2, halfDAll*2, 1, 1);
+    floorGeo.rotateX(-Math.PI/2);
+    var floorMat = new THREE.MeshStandardMaterial({ color:0xd8d4f5, flatShading:true, roughness:0.95 });
+    var floor = new THREE.Mesh(floorGeo, floorMat);
+    floor.position.set(cxAll, PATH_Y, czAll);
+    floor.receiveShadow = true;
+    scene.add(floor);
+
+    // wooden-look area rug strip in front of the podiums for warmth
+    var rugGeo = new THREE.PlaneGeometry(1.6, halfDAll*2 - 3.2, 1, 1);
+    rugGeo.rotateX(-Math.PI/2);
+    var rugMat = new THREE.MeshStandardMaterial({ color:0xb59cff, flatShading:true, roughness:0.9 });
+    var rug = new THREE.Mesh(rugGeo, rugMat);
+    rug.position.set(cxAll + halfWAll*0.35, PATH_Y + 0.005, czAll);
+    rug.receiveShadow = true;
+    scene.add(rug);
+
+    // ceiling panel so the room reads as a real enclosed space when the
+    // camera tilts up
+    var ceilGeo = new THREE.PlaneGeometry(halfWAll*2, halfDAll*2, 1, 1);
+    ceilGeo.rotateX(Math.PI/2);
+    var ceilMat = new THREE.MeshStandardMaterial({ color:0x2a2750, flatShading:true, roughness:0.9 });
+    var ceiling = new THREE.Mesh(ceilGeo, ceilMat);
+    ceiling.position.set(cxAll, LOCKER.wallHeight, czAll);
+    scene.add(ceiling);
+
+    // four walls with two gaps: one where the branch path enters through
+    // the east wall (near branchZ), and one where the exit connector
+    // leaves through the north wall (near exitRoomX). Each wall with a
+    // gap is built as two shorter segments straddling that opening.
+    var entranceZ = LOCKER.branchZ;
+    var gapHalf = PATH_WIDTH/2 + 0.4;
+
+    // east wall (x = maxX), split around the entrance gap
+    var eastSegLen1 = (entranceZ - gapHalf) - minZ;
+    if(eastSegLen1 > 0.5){
+      addLockerWall(maxX, minZ + eastSegLen1/2, t/2, eastSegLen1/2, wallMat);
     }
+    var eastSegLen2 = maxZ - (entranceZ + gapHalf);
+    if(eastSegLen2 > 0.5){
+      addLockerWall(maxX, maxZ - eastSegLen2/2, t/2, eastSegLen2/2, wallMat);
+    }
+
+    // west wall (x = minX), solid
+    addLockerWall(minX, czAll, t/2, halfDAll, wallMat);
+
+    // south wall (z = minZ), solid
+    addLockerWall(cxAll, minZ, halfWAll, t/2, wallMat);
+
+    // north wall (z = maxZ), split around the exit gap (exit is near exitRoomX)
+    var exitGapHalf = PATH_WIDTH/2 + 0.4;
+    var northSegLen1 = (LOCKER.exitRoomX - exitGapHalf) - minX;
+    if(northSegLen1 > 0.5){
+      addLockerWall(minX + northSegLen1/2, maxZ, northSegLen1/2, t/2, wallMat);
+    }
+    var northSegLen2 = maxX - (LOCKER.exitRoomX + exitGapHalf);
+    if(northSegLen2 > 0.5){
+      addLockerWall(maxX - northSegLen2/2, maxZ, northSegLen2/2, t/2, wallMat);
+    }
+
+    // podiums: low cylinders lined up along the room's long axis, each a
+    // distinct saturated color. Stepping onto one recolors the player.
+    var podiumRadius = 0.85;
+    var podiumHeight = 0.35;
+    var podiumCount = PODIUM_COLORS.length;
+    var usableMinZ = minZ + 2.2;
+    var usableMaxZ = maxZ - 2.2;
+    var spacing = (usableMaxZ - usableMinZ) / (podiumCount - 1);
+    var podiumX = cxAll + halfWAll * 0.35; // offset toward the entrance side, leaving clear floor in front of the mannequin on the far (west) wall
+
+    for(var i=0;i<podiumCount;i++){
+      var pz = usableMinZ + spacing * i;
+      var color = PODIUM_COLORS[i];
+
+      // dark base ring under the colored top, so each podium reads as a
+      // proper two-tier dais rather than a flat coin lying on the floor
+      var baseRingGeo = new THREE.CylinderGeometry(podiumRadius*1.18, podiumRadius*1.28, 0.12, 12);
+      var baseRingMat = new THREE.MeshStandardMaterial({ color:0x2a2750, flatShading:true, roughness:0.8 });
+      var baseRing = new THREE.Mesh(baseRingGeo, baseRingMat);
+      baseRing.position.set(podiumX, PATH_Y + 0.06, pz);
+      baseRing.castShadow = true;
+      baseRing.receiveShadow = true;
+      scene.add(baseRing);
+
+      var podGeo = new THREE.CylinderGeometry(podiumRadius, podiumRadius*1.05, podiumHeight, 10);
+      var podMat = new THREE.MeshStandardMaterial({ color:color, flatShading:true, roughness:0.45, emissive:color, emissiveIntensity:0.12 });
+      var pod = new THREE.Mesh(podGeo, podMat);
+      pod.position.set(podiumX, PATH_Y + 0.12 + podiumHeight/2, pz);
+      pod.castShadow = true;
+      pod.receiveShadow = true;
+      scene.add(pod);
+
+      // small floating color swatch flag above each podium so the choice is
+      // legible from a distance, not just when standing right on top of it
+      var flagPoleGeo = new THREE.CylinderGeometry(0.025, 0.025, 0.9, 5);
+      var flagPoleMat = new THREE.MeshStandardMaterial({ color:0x3a3d5c });
+      var flagPole = new THREE.Mesh(flagPoleGeo, flagPoleMat);
+      flagPole.position.set(podiumX - podiumRadius*0.7, PATH_Y + 0.12 + podiumHeight + 0.45, pz - podiumRadius*0.7);
+      scene.add(flagPole);
+      var flagGeo = new THREE.PlaneGeometry(0.4, 0.28);
+      var flagMat = new THREE.MeshStandardMaterial({ color:color, flatShading:true, roughness:0.5, side:THREE.DoubleSide, emissive:color, emissiveIntensity:0.25 });
+      var flag = new THREE.Mesh(flagGeo, flagMat);
+      flag.position.set(podiumX - podiumRadius*0.7 + 0.21, PATH_Y + 0.12 + podiumHeight + 0.7, pz - podiumRadius*0.7);
+      flag.rotation.y = Math.PI/2;
+      scene.add(flag);
+
+      // soft point light matching the podium color so the room picks up a
+      // rainbow glow along the color-picker line, reinforcing "pick a color"
+      var podLight = new THREE.PointLight(color, 0.5, 3.2, 2);
+      podLight.position.set(podiumX, PATH_Y + 0.6, pz);
+      scene.add(podLight);
+
+      lockerPodiums.push({ x: podiumX, z: pz, radius: podiumRadius, color: color });
+    }
+
+    // baseboards along each solid wall run so the room-to-wall junction
+    // looks finished rather than two flat-shaded planes meeting at a seam
+    var baseboardH = 0.22;
+    function addBaseboard(cx, cz, halfW, halfD){
+      var bGeo = new THREE.BoxGeometry(halfW*2 + 0.05, baseboardH, halfD*2 + 0.05);
+      var b = new THREE.Mesh(bGeo, trimMat);
+      b.position.set(cx, PATH_Y + baseboardH/2, cz);
+      scene.add(b);
+    }
+    addBaseboard(minX + t/2, czAll, t/2 + 0.03, halfDAll + 0.03);
+    addBaseboard(cxAll, minZ + t/2, halfWAll + 0.03, t/2 + 0.03);
+
+    setupMannequin(minX, cxAll, czAll, halfDAll, t);
+  }
+
+  // resolve a moving circle against the locker room's wall colliders,
+  // treating each wall segment as an axis-aligned box (same push-out
+  // approach as resolveRockCollisions, but for rectangles instead of circles)
+  function resolveLockerWallCollisions(pos, radius){
+    for(var i=0;i<lockerColliders.length;i++){
+      var w = lockerColliders[i];
+      var closestX = THREE.MathUtils.clamp(pos.x, w.x - w.halfW, w.x + w.halfW);
+      var closestZ = THREE.MathUtils.clamp(pos.z, w.z - w.halfD, w.z + w.halfD);
+      var dx = pos.x - closestX;
+      var dz = pos.z - closestZ;
+      var distSq = dx*dx + dz*dz;
+      if(distSq < radius*radius){
+        var dist = Math.sqrt(distSq);
+        if(dist > 0.0001){
+          var overlap = radius - dist;
+          pos.x += (dx/dist) * overlap;
+          pos.z += (dz/dist) * overlap;
+        } else {
+          // player center exactly on the wall edge (rare) — push out along
+          // whichever axis has the smaller penetration to avoid a NaN direction
+          pos.x += radius;
+        }
+      }
+    }
+  }
+
+  // check podiums and recolor the player's body/limb materials immediately
+  // when standing on one
+  function updatePodiumStanding(){
+    for(var i=0;i<lockerPodiums.length;i++){
+      var p = lockerPodiums[i];
+      var dx = playerState.pos.x - p.x;
+      var dz = playerState.pos.z - p.z;
+      var dist = Math.sqrt(dx*dx + dz*dz);
+      if(dist <= p.radius + playerState.radius*0.6){
+        applyPlayerColor(p.color);
+        break;
+      }
+    }
+  }
+
+  function recolorCharacterParts(parts, color){
+    parts.torso.material.color.setHex(color);
+    // torsoCapTop/torsoCapBottom and legL/legR are invisible placeholder
+    // meshes/groups on the droplet character (kept only so this shared
+    // recolor code doesn't need special-casing) — guard material access
+    // since legL/legR are now empty THREE.Group objects with no material
+    if(parts.torsoCapTop.material) parts.torsoCapTop.material.color.setHex(color);
+    if(parts.torsoCapBottom.material) parts.torsoCapBottom.material.color.setHex(color);
+    // armL/armR are now small groups (upper limb + rounded hand), so recolor
+    // every child mesh's material rather than assuming a single mesh
+    [parts.armL, parts.armR].forEach(function(arm){
+      if(arm.material){ arm.material.color.setHex(color); return; }
+      arm.children.forEach(function(child){
+        if(child.material) child.material.color.setHex(color);
+      });
+    });
+    if(parts.legL.material) parts.legL.material.color.setHex(color);
+    if(parts.legR.material) parts.legR.material.color.setHex(color);
+    // head is an invisible reference point on the droplet (no visible head
+    // mesh), so only recolor it if it actually has a material
+    if(parts.head.material) parts.head.material.color.setHex(color);
+  }
+
+  function applyPlayerColor(color){
+    var parts = player.userData.parts;
+    if(parts.torso.material.color.getHex() === color) return; // already this color, skip redundant material touch
+    recolorCharacterParts(parts, color);
+    // the locker room mannequin is a full-body copy of the player model —
+    // recolor it in the same call so it's always showing the player's
+    // current color with nothing extra to sync per frame
+    if(lockerMannequin){
+      recolorCharacterParts(lockerMannequin.userData.parts, color);
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // MANNEQUIN — a full-body static copy of the player model, standing
+  // against the wall opposite the podiums. It always shows the player's
+  // current color: whenever the player steps on a podium and recolors
+  // (see applyPlayerColor), the mannequin is recolored to match in the
+  // same call, so there's nothing extra to keep in sync per frame.
+  // ---------------------------------------------------------------------
+  function setupMannequin(wallX, roomCenterX, roomCenterZ, halfDAll, wallThickness){
+    // stand the mannequin against the wall opposite the podiums, facing
+    // into the room so the player walks up and sees it face-on
+    lockerMannequin = buildCharacter(0xff5d5d, 0xffe08a);
+    var standX = wallX + wallThickness/2 + 0.9;
+    lockerMannequin.position.set(standX, 0, roomCenterZ);
+    lockerMannequin.rotation.y = Math.PI/2; // face -X, into the room, toward the podiums
+    scene.add(lockerMannequin);
+
+    // small round base plate under its feet so it reads as a display
+    // stand rather than a character just standing in a corner
+    var baseGeo = new THREE.CylinderGeometry(0.65, 0.7, 0.12, 12);
+    var baseMat = new THREE.MeshStandardMaterial({ color:0x242640, flatShading:true, roughness:0.8 });
+    var base = new THREE.Mesh(baseGeo, baseMat);
+    base.position.set(standX, 0.06, roomCenterZ);
+    base.castShadow = true;
+    base.receiveShadow = true;
+    scene.add(base);
+
+    // thin support pole rising behind the mannequin so the base plate reads
+    // as an actual display stand rather than the character floating in place
+    var poleGeo = new THREE.CylinderGeometry(0.05, 0.05, 1.0, 6);
+    var poleMat = new THREE.MeshStandardMaterial({ color:0x3a3d5c, flatShading:true, roughness:0.7 });
+    var pole = new THREE.Mesh(poleGeo, poleMat);
+    pole.position.set(standX, 0.5, roomCenterZ);
+    scene.add(pole);
+
+    // explanatory plaque hovering beside the mannequin, telling the player
+    // what it's for — short, so it reads at a glance while walking past
+    makeSignPlaque(
+      standX + 0.05, 1.55, roomCenterZ - 1.15,
+      -Math.PI/2,
+      'ЭТО ТЫ', 'Встань на подиум — сменишь цвет'
+    );
+  }
+
+  // builds a small floating text plaque using a canvas texture on a plane —
+  // cheap, crisp, and needs no external font/image assets
+  function makeSignPlaque(x, y, z, rotY, title, subtitle){
+    var canvas = document.createElement('canvas');
+    canvas.width = 512;
+    canvas.height = 160;
+    var ctx = canvas.getContext('2d');
+
+    // rounded card background
+    ctx.fillStyle = 'rgba(26,27,46,0.92)';
+    roundRectPath(ctx, 4, 4, canvas.width-8, canvas.height-8, 22);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+    ctx.lineWidth = 4;
+    roundRectPath(ctx, 4, 4, canvas.width-8, canvas.height-8, 22);
+    ctx.stroke();
+
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#ffe08a';
+    ctx.font = 'bold 46px Arial, sans-serif';
+    ctx.fillText(title, canvas.width/2, 66);
+
+    ctx.fillStyle = '#e8e4ff';
+    ctx.font = '30px Arial, sans-serif';
+    ctx.fillText(subtitle, canvas.width/2, 116);
+
+    var texture = new THREE.CanvasTexture(canvas);
+    texture.needsUpdate = true;
+    var mat = new THREE.MeshBasicMaterial({ map:texture, transparent:true, side:THREE.DoubleSide });
+    var geo = new THREE.PlaneGeometry(1.7, 0.53);
+    var plaque = new THREE.Mesh(geo, mat);
+    plaque.position.set(x, y, z);
+    plaque.rotation.y = rotY;
+    scene.add(plaque);
+
+    // slim frame/backing behind the plaque so it doesn't look like a flat
+    // sticker floating in the air
+    var frameGeo = new THREE.PlaneGeometry(1.82, 0.65);
+    var frameMat = new THREE.MeshStandardMaterial({ color:0x4a3d7a, flatShading:true, roughness:0.6 });
+    var frame = new THREE.Mesh(frameGeo, frameMat);
+    frame.position.set(x + Math.sin(rotY)*0.01, y, z + Math.cos(rotY)*0.01);
+    frame.rotation.y = rotY;
+    scene.add(frame);
+
+    return plaque;
+  }
+
+  function roundRectPath(ctx, x, y, w, h, r){
+    ctx.beginPath();
+    ctx.moveTo(x+r, y);
+    ctx.arcTo(x+w, y, x+w, y+h, r);
+    ctx.arcTo(x+w, y+h, x, y+h, r);
+    ctx.arcTo(x, y+h, x, y, r);
+    ctx.arcTo(x, y, x+w, y, r);
+    ctx.closePath();
   }
 
   // resolve a moving circle (player or dummy) against all rock colliders by
@@ -1883,63 +2274,141 @@
   function buildCharacter(bodyColor, headColor){
     var group = new THREE.Group();
 
-    var bodyMat = new THREE.MeshStandardMaterial({ color: bodyColor, flatShading:true, roughness:0.7 });
-    var headMat = new THREE.MeshStandardMaterial({ color: headColor, flatShading:true, roughness:0.6 });
-    var limbMat = new THREE.MeshStandardMaterial({ color: bodyColor, flatShading:true, roughness:0.7 });
+    // low-poly water-droplet character: a rounded teardrop body (dark teal
+    // base blended toward the podium/team color), big cartoon eyes, a
+    // smiling mouth, and two stubby little arms poking out the sides —
+    // modeled after the mascot reference. No separate head/legs visually,
+    // but we still expose head/eyeL/eyeR/armL/armR/legL/legR in userData
+    // so the rest of the game (recoloring, walk-cycle swing, first-person
+    // head-hide) keeps working unchanged.
+    var bodyMat = new THREE.MeshStandardMaterial({ color: bodyColor, flatShading:true, roughness:0.55 });
+    var limbMat = new THREE.MeshStandardMaterial({ color: bodyColor, flatShading:true, roughness:0.55 });
+    var whiteMat = new THREE.MeshStandardMaterial({ color:0xffffff, flatShading:true, roughness:0.4 });
+    var pupilMat = new THREE.MeshStandardMaterial({ color:0x1a1b2e, flatShading:true, roughness:0.3 });
 
-    // torso (cylinder + sphere caps to fake a capsule shape — r128 has no CapsuleGeometry)
-    var torso = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.42, 0.7, 8), bodyMat);
-    torso.position.y = 1.05;
+    // main droplet body: a tall pointed teardrop shape, built with a low
+    // vertex-count cone-ish lathe so it reads as faceted/low-poly like the
+    // reference. LatheGeometry revolves a 2D profile (bottom-round, tapering
+    // to a point at top) around the Y axis.
+    var profilePts = [
+      new THREE.Vector2(0.0,   0.0),
+      new THREE.Vector2(0.20,  0.015),
+      new THREE.Vector2(0.38,  0.07),
+      new THREE.Vector2(0.52,  0.16),
+      new THREE.Vector2(0.61,  0.30),
+      new THREE.Vector2(0.64,  0.46),
+      new THREE.Vector2(0.60,  0.66),
+      new THREE.Vector2(0.48,  0.88),
+      new THREE.Vector2(0.28,  1.08),
+      new THREE.Vector2(0.0,   1.28)
+    ];
+    var dropGeo = new THREE.LatheGeometry(profilePts, 8);
+    var torso = new THREE.Mesh(dropGeo, bodyMat);
+    torso.position.y = 0.5;
     torso.castShadow = true;
     group.add(torso);
-    var torsoCapTop = new THREE.Mesh(new THREE.SphereGeometry(0.42, 8, 6), bodyMat);
-    torsoCapTop.position.y = 1.4;
-    torsoCapTop.castShadow = true;
+
+    // torsoCapTop/torsoCapBottom kept as tiny invisible stand-ins so any
+    // code touching them (recolor list) doesn't error — the single lathe
+    // mesh above already covers the whole silhouette
+    var torsoCapTop = new THREE.Mesh(new THREE.SphereGeometry(0.001, 4, 4), bodyMat);
+    torsoCapTop.visible = false;
     group.add(torsoCapTop);
-    var torsoCapBottom = new THREE.Mesh(new THREE.SphereGeometry(0.42, 8, 6), bodyMat);
-    torsoCapBottom.position.y = 0.7;
-    torsoCapBottom.castShadow = true;
+    var torsoCapBottom = new THREE.Mesh(new THREE.SphereGeometry(0.001, 4, 4), bodyMat);
+    torsoCapBottom.visible = false;
     group.add(torsoCapBottom);
 
-    // head
-    var head = new THREE.Mesh(new THREE.IcosahedronGeometry(0.36, 1), headMat);
-    head.position.y = 1.75;
-    head.castShadow = true;
-    group.add(head);
+    // face sits directly on the droplet body rather than a separate head
+    // mesh — big round white eyes with dark pupils, positioned on the
+    // rounded lower-front of the drop, just like the reference art
+    var eyeWhiteGeo = new THREE.SphereGeometry(0.185, 8, 8);
+    var eyeWhiteL = new THREE.Mesh(eyeWhiteGeo, whiteMat);
+    eyeWhiteL.position.set(0.19, 1.0, 0.56);
+    eyeWhiteL.scale.set(0.85, 1.05, 0.4);
+    group.add(eyeWhiteL);
+    var eyeWhiteR = eyeWhiteL.clone();
+    eyeWhiteR.position.x = -0.19;
+    group.add(eyeWhiteR);
 
-    // eyes (two tiny dark spheres for character)
-    var eyeMat = new THREE.MeshStandardMaterial({ color:0x1a1b2e, flatShading:true });
-    var eyeGeo = new THREE.SphereGeometry(0.05, 6, 6);
-    var eyeL = new THREE.Mesh(eyeGeo, eyeMat);
-    eyeL.position.set(0.14, 1.78, 0.3);
+    var pupilGeo = new THREE.SphereGeometry(0.09, 8, 8);
+    var eyeL = new THREE.Mesh(pupilGeo, pupilMat);
+    eyeL.position.set(0.23, 1.0, 0.64);
+    eyeL.scale.set(1, 1, 0.5);
     group.add(eyeL);
     var eyeR = eyeL.clone();
-    eyeR.position.x = -0.14;
+    eyeR.position.x = -0.23;
     group.add(eyeR);
 
-    // arms (simple rounded cylinders — good enough at low-poly scale)
-    var armGeo = new THREE.CylinderGeometry(0.12, 0.1, 0.6, 6);
-    var armL = new THREE.Mesh(armGeo, limbMat);
-    armL.position.set(0.55, 1.1, 0);
-    armL.rotation.z = 0.25;
-    armL.castShadow = true;
+    // tiny eye-shine dots for extra charm
+    var shineGeo = new THREE.SphereGeometry(0.03, 6, 6);
+    var shineMat = new THREE.MeshStandardMaterial({ color:0xffffff, flatShading:true });
+    var shineL = new THREE.Mesh(shineGeo, shineMat);
+    shineL.position.set(0.28, 1.04, 0.66);
+    group.add(shineL);
+    var shineR = shineL.clone();
+    shineR.position.x = -0.19;
+    group.add(shineR);
+
+    // mouth removed per request — face now shows only eyes
+
+    // a "head" reference point used for first-person head-hiding logic —
+    // invisible, positioned at the top of the drop where a head would be
+    var head = new THREE.Mesh(new THREE.SphereGeometry(0.001, 4, 4), bodyMat);
+    head.position.y = 1.65;
+    group.add(head);
+
+    // stubby little arms poking out the sides, matching the reference's
+    // short rounded nubs rather than full-length limbs. Built as a small
+    // group (upper capsule + rounded "hand" sphere at the tip) so it reads
+    // as a soft rounded limb even on renderers without CapsuleGeometry.
+    function buildArm(){
+      var armGroup = new THREE.Group();
+      var upperGeo = typeof THREE.CapsuleGeometry === 'function'
+        ? new THREE.CapsuleGeometry(0.13, 0.16, 4, 8)
+        : new THREE.CylinderGeometry(0.13, 0.13, 0.3, 8);
+      var upper = new THREE.Mesh(upperGeo, limbMat);
+      upper.castShadow = true;
+      armGroup.add(upper);
+      // rounded hand/fist at the outer tip so the limb doesn't read as a
+      // flat-capped cylinder
+      var handGeo = new THREE.SphereGeometry(0.145, 8, 8);
+      var hand = new THREE.Mesh(handGeo, limbMat);
+      hand.position.y = -0.19;
+      hand.castShadow = true;
+      armGroup.add(hand);
+      return armGroup;
+    }
+    var armL = buildArm();
+    armL.position.set(0.66, 0.86, 0.02);
+    armL.rotation.z = 1.3;
+    armL.rotation.y = 0.1;
     group.add(armL);
-    var armR = armL.clone();
-    armR.position.x = -0.55;
-    armR.rotation.z = -0.25;
+    var armR = buildArm();
+    armR.position.set(-0.66, 0.86, 0.02);
+    armR.rotation.z = -1.3;
+    armR.rotation.y = -0.1;
     group.add(armR);
 
-    // legs
-    var legGeo = new THREE.CylinderGeometry(0.14, 0.12, 0.6, 6);
-    var legL = new THREE.Mesh(legGeo, limbMat);
-    legL.position.set(0.2, 0.35, 0);
-    legL.castShadow = true;
+    // no legs on a water droplet — keep invisible placeholder groups so the
+    // walk-cycle code (which rotates parts.legL/legR.rotation.x) has valid
+    // objects to touch without any visible effect
+    var legL = new THREE.Group();
+    legL.position.set(0.14, 0.05, 0);
     group.add(legL);
-    var legR = legL.clone();
-    legR.position.x = -0.2;
+    var legR = new THREE.Group();
+    legR.position.set(-0.14, 0.05, 0);
     group.add(legR);
 
-    group.userData.parts = { torso:torso, torsoCapTop:torsoCapTop, torsoCapBottom:torsoCapBottom, head:head, eyeL:eyeL, eyeR:eyeR, armL:armL, armR:armR, legL:legL, legR:legR };
+    // soft ambient-occlusion-style shading blob at the base so the droplet
+    // sits believably rather than looking like it's floating mid-air —
+    // purely cosmetic, doesn't participate in recoloring
+    var baseShadeGeo = new THREE.SphereGeometry(0.62, 8, 5, 0, Math.PI*2, Math.PI*0.75, Math.PI*0.25);
+    var baseShadeMat = new THREE.MeshStandardMaterial({ color:0x000000, transparent:true, opacity:0.08, flatShading:true, depthWrite:false });
+    var baseShade = new THREE.Mesh(baseShadeGeo, baseShadeMat);
+    baseShade.position.y = 0.12;
+    group.add(baseShade);
+
+    group.userData.parts = { torso:torso, torsoCapTop:torsoCapTop, torsoCapBottom:torsoCapBottom, head:head, eyeL:eyeL, eyeR:eyeR, armL:armL, armR:armR, legL:legL, legR:legR, eyeWhiteL:eyeWhiteL, eyeWhiteR:eyeWhiteR, shineL:shineL, shineR:shineR };
 
     return group;
   }
@@ -1975,6 +2444,10 @@
     parts.head.visible = false;
     parts.eyeL.visible = false;
     parts.eyeR.visible = false;
+    parts.eyeWhiteL.visible = false;
+    parts.eyeWhiteR.visible = false;
+    parts.shineL.visible = false;
+    parts.shineR.visible = false;
     updatePlayerTransform();
   }
 
@@ -2093,8 +2566,8 @@
         var swing = Math.sin(r.animT) * 0.6;
         parts.legL.rotation.x = swing;
         parts.legR.rotation.x = -swing;
-        parts.armL.rotation.x = -swing * 0.8;
-        parts.armR.rotation.x = swing * 0.8;
+        parts.armL.rotation.x = -swing * 1.3;
+        parts.armR.rotation.x = swing * 1.3;
       } else {
         parts.legL.rotation.x = THREE.MathUtils.lerp(parts.legL.rotation.x, 0, 0.2);
         parts.legR.rotation.x = THREE.MathUtils.lerp(parts.legR.rotation.x, 0, 0.2);
@@ -3129,10 +3602,17 @@
     // solid rocks: push the player back out if walking into one
     resolveRockCollisions(playerState.pos, playerState.radius);
 
+    // solid locker room walls: same push-out approach, keeps the player
+    // from walking through the walls anywhere but the two signposted gaps
+    resolveLockerWallCollisions(playerState.pos, playerState.radius);
+
     // clamp inside world bounds
     var half = WORLD_SIZE/2 - 2;
     playerState.pos.x = THREE.MathUtils.clamp(playerState.pos.x, -half, half);
     playerState.pos.z = THREE.MathUtils.clamp(playerState.pos.z, -half, half);
+
+    // stepping onto a podium recolors the player immediately
+    updatePodiumStanding();
 
     updatePlayerTransform();
 
@@ -3144,8 +3624,8 @@
       var swing = Math.sin(playerState.animT) * 0.6;
       parts.legL.rotation.x = swing;
       parts.legR.rotation.x = -swing;
-      parts.armL.rotation.x = -swing * 0.8;
-      parts.armR.rotation.x = swing * 0.8;
+      parts.armL.rotation.x = -swing * 1.3;
+      parts.armR.rotation.x = swing * 1.3;
     } else {
       parts.legL.rotation.x = THREE.MathUtils.lerp(parts.legL.rotation.x, 0, 0.2);
       parts.legR.rotation.x = THREE.MathUtils.lerp(parts.legR.rotation.x, 0, 0.2);
