@@ -895,8 +895,10 @@
       return out;
     }
 
-    // TURN credentials from metered.ca (global region, auto geo-routed to
-    // nearest edge). Replaces the previous turnix.io credential.
+    // TURN credentials from metered.ca. Using the "standard" relay host,
+    // not "global" — global.relay.metered.ca requires a paid plan and
+    // returned a 400 TURN allocate error on this (free-tier) credential;
+    // standard.relay.metered.ca is the one available on the free plan.
     var TURN_USERNAME = 'H1fmhBtyDtTbEpa3';
     var TURN_CREDENTIAL = '353e90e58d6cd9b600186d85';
 
@@ -918,10 +920,10 @@
               // gets through the strictest of the two networks' firewalls.
               {
                 urls: [
-                  'turn:global.relay.metered.ca:80',
-                  'turn:global.relay.metered.ca:80?transport=tcp',
-                  'turn:global.relay.metered.ca:443',
-                  'turns:global.relay.metered.ca:443?transport=tcp'
+                  'turn:standard.relay.metered.ca:80',
+                  'turn:standard.relay.metered.ca:80?transport=tcp',
+                  'turn:standard.relay.metered.ca:443',
+                  'turns:standard.relay.metered.ca:443?transport=tcp'
                 ],
                 username: TURN_USERNAME,
                 credential: TURN_CREDENTIAL
@@ -992,6 +994,9 @@
           NetDiag.log('ICE candidate ошибка (' + conn.peer + '): код ' + ev.errorCode + ' ' + (ev.errorText || '') + (ev.url ? (' [' + ev.url + ']') : ''));
           if(ev.errorCode === 401 && ev.url && ev.url.indexOf('relay.metered.ca') !== -1){
             NetDiag.log('⚠ TURN-сервер metered.ca отклонил credentials (истёк срок действия или отозваны). См. TURN_USERNAME/TURN_CREDENTIAL в коде.');
+          }
+          if(ev.errorCode === 400 && ev.url && ev.url.indexOf('relay.metered.ca') !== -1){
+            NetDiag.log('⚠ TURN-сервер metered.ca вернул 400 (allocate error) — обычно означает, что этот хост/регион недоступен на текущем тарифном плане.');
           }
         });
         pc.addEventListener('icecandidate', function(ev){
