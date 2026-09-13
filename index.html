@@ -2053,7 +2053,15 @@
     if(!r){
       r = remotePlayers[pid] = makeRemoteAvatar(pid);
     }
-    r.targetPos.set(s.x, s.y, s.z);
+    // Ignore the sender's own y — terrain height is deterministic and
+    // identical on every client (same seeded hills/rocks), so recompute it
+    // locally from x/z instead of trusting the network value. The sender
+    // never actually tracked its own ground height in playerState.pos.y
+    // (it stays at its initial value forever), so relaying it as-is put
+    // every remote avatar at a fixed world-space height instead of
+    // following the hill under their feet.
+    var gy = getGroundY(s.x, s.z);
+    r.targetPos.set(s.x, gy, s.z);
     r.targetYaw = s.yaw;
     r.walking = !!s.walking;
   }
@@ -2279,7 +2287,16 @@
       var dyn = dynamites[j];
       dynSnap.push([dyn.mesh.position.x, dyn.mesh.position.y, dyn.mesh.position.z, dyn.landed?1:0]);
     }
-    return { dummies: dummySnap, dynamites: dynSnap };
+    // the host never sends itself an 'input' packet (there's no one to send
+    // it to but itself), so its own avatar state has to ride along in the
+    // snapshot instead — otherwise guests never learn where the host is
+    // and its remote avatar just sits frozen at its spawn point.
+    var myMag = Math.sqrt(joyVector.x*joyVector.x + joyVector.y*joyVector.y);
+    var hostState = {
+      x: playerState.pos.x, z: playerState.pos.z,
+      yaw: playerState.yaw, walking: myMag > 0.15
+    };
+    return { dummies: dummySnap, dynamites: dynSnap, host: hostState };
   }
 
   function applyHostSnapshot(snap){
@@ -2291,6 +2308,11 @@
       d.mesh.position.copy(d.pos);
       d.mesh.rotation.set(s[3], s[4], s[5]);
       d.airborne = !!s[6];
+    }
+    // the host's own avatar rides along in the snapshot (see buildHostSnapshot)
+    // since it never sends itself an 'input' packet like other guests do
+    if(snap.host){
+      applyRemoteAvatarState('host', snap.host);
     }
     // guests don't need to track in-flight dynamite meshes precisely frame
     // by frame (thrown visuals already played locally via events) — the
