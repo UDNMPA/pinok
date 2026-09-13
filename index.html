@@ -533,7 +533,7 @@
   <div id="startScreen">
     <div class="logo">ПИНОК<span>.IO</span></div>
     <div class="sub">Беги, пинай манекенов и взрывай всё динамитом</div>
-    <div class="hint" style="margin-top:-6px;opacity:0.5;">v1</div>
+    <div class="hint" style="margin-top:-6px;opacity:0.5;">v2</div>
     <button id="tapButton">ТАП ЧТОБЫ НАЧАТЬ</button>
     <div class="hint">Полноэкранный режим включится автоматически</div>
   </div>
@@ -577,7 +577,7 @@
   <!-- HUD -->
   <div id="hud">
     <div id="topBar">
-      <div id="topBadge">ПИНОК.IO — тест-полигон · v1</div>
+      <div id="topBadge">ПИНОК.IO — тест-полигон · v2</div>
       <button id="settingsBtn" aria-label="Настройки">⚙️</button>
     </div>
 
@@ -856,21 +856,56 @@
     function attachIceDiagnostics(conn){
       if(!conn || conn.__diagAttached) return;
       conn.__diagAttached = true;
-      conn.on('open', function(){
+
+      // Wire the raw RTCPeerConnection's ICE events as early as possible —
+      // NOT inside conn.on('open', ...), because 'open' only fires once
+      // ICE has already succeeded. If ICE never completes (the exact
+      // failure mode we need to diagnose), 'open' never fires and we'd see
+      // nothing at all until the outer timeout. PeerJS attaches
+      // conn.peerConnection synchronously on connect()/incoming call, but
+      // to be safe (some PeerJS versions attach it one tick later) we poll
+      // briefly until it exists.
+      var attempts = 0;
+      function wirePc(){
         var pc = conn.peerConnection;
-        if(!pc){ NetDiag.log('нет peerConnection у ' + conn.peer); return; }
-        NetDiag.log('ICE: соединение с ' + conn.peer + ' открыто');
+        if(!pc){
+          attempts++;
+          if(attempts < 20) setTimeout(wirePc, 100);
+          else NetDiag.log('peerConnection так и не появился у ' + conn.peer);
+          return;
+        }
+        NetDiag.log('RTCPeerConnection создан для ' + conn.peer + ' (состояние: ' + pc.iceConnectionState + ')');
+
         pc.addEventListener('iceconnectionstatechange', function(){
-          NetDiag.log('ICE state (' + conn.peer + '): ' + pc.iceConnectionState);
+          NetDiag.log('ICE (' + conn.peer + '): ' + pc.iceConnectionState);
+          if(pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'disconnected'){
+            NetDiag.log('⚠ ICE не смог соединиться — TURN-relay тоже не отработал');
+          }
+        });
+        pc.addEventListener('icegatheringstatechange', function(){
+          NetDiag.log('ICE gathering (' + conn.peer + '): ' + pc.iceGatheringState);
         });
         pc.addEventListener('icecandidateerror', function(ev){
-          NetDiag.log('ICE candidate error (' + conn.peer + '): ' + (ev.errorText || ev.errorCode || 'unknown'));
+          NetDiag.log('ICE candidate ошибка (' + conn.peer + '): код ' + ev.errorCode + ' ' + (ev.errorText || '') + (ev.url ? (' [' + ev.url + ']') : ''));
         });
-        // once connected, inspect which candidate pair actually won —
-        // 'relay' means TURN saved the connection, 'srflx'/'host' means a
-        // direct route worked without needing relay at all
+        pc.addEventListener('icecandidate', function(ev){
+          if(!ev.candidate) return;
+          var type = ev.candidate.type || '?';
+          // only log the first candidate of each type to keep the panel readable
+          conn.__seenTypes = conn.__seenTypes || {};
+          if(!conn.__seenTypes[type]){
+            conn.__seenTypes[type] = true;
+            NetDiag.log('Найден ' + type + '-кандидат (' + conn.peer + ')');
+          }
+        });
+      }
+      wirePc();
+
+      conn.on('open', function(){
+        var pc = conn.peerConnection;
+        NetDiag.log('✓ Канал данных открыт с ' + conn.peer);
+        if(!pc || !pc.getStats) return;
         setTimeout(function(){
-          if(!pc.getStats) return;
           pc.getStats(null).then(function(stats){
             stats.forEach(function(report){
               if(report.type === 'candidate-pair' && report.state === 'succeeded'){
@@ -882,7 +917,7 @@
               }
             });
           }).catch(function(){});
-        }, 2500);
+        }, 1500);
       });
       conn.on('error', function(err){
         NetDiag.log('Connection error (' + conn.peer + '): ' + (err && err.message ? err.message : err));
