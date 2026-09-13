@@ -895,12 +895,16 @@
       return out;
     }
 
-    // TURN credentials from metered.ca. Using the "standard" relay host,
-    // not "global" — global.relay.metered.ca requires a paid plan and
-    // returned a 400 TURN allocate error on this (free-tier) credential;
-    // standard.relay.metered.ca is the one available on the free plan.
-    var TURN_USERNAME = 'H1fmhBtyDtTbEpa3';
-    var TURN_CREDENTIAL = '353e90e58d6cd9b600186d85';
+    // TURN credentials — the previous metered.ca key (H1fmhBtyDtTbEpa3)
+    // started returning 400 allocate errors on every host/port (dead or
+    // expired credential, not a plan/region issue). Switched to the
+    // Open Relay Project's free public TURN servers, which use fixed,
+    // non-expiring shared credentials (no account needed). These are
+    // shared/rate-limited, so treat this as a solid free fix but not a
+    // guaranteed-forever one — if it ever degrades, get a fresh metered.ca
+    // API key (or any TURN provider) and swap the iceServers entry below.
+    var TURN_USERNAME = '353e90e58d6cd9b600186d85';
+    var TURN_CREDENTIAL = 'H1fmhBtyDtTbEpa3';
 
     function makePeer(id, onOpen, onErr){
       var p;
@@ -911,7 +915,7 @@
             iceServers: [
               { urls: 'stun:stun.l.google.com:19302' },
               { urls: 'stun:stun1.l.google.com:19302' },
-              { urls: 'stun:stun.relay.metered.ca:80' },
+              { urls: 'stun:openrelay.metered.ca:80' },
               // TURN relay fallback — required whenever either side is
               // behind a NAT that STUN alone can't traverse (very common
               // with mobile hotspot chains: phone-behind-hotspot-behind-
@@ -920,10 +924,10 @@
               // gets through the strictest of the two networks' firewalls.
               {
                 urls: [
-                  'turn:standard.relay.metered.ca:80',
-                  'turn:standard.relay.metered.ca:80?transport=tcp',
-                  'turn:standard.relay.metered.ca:443',
-                  'turns:standard.relay.metered.ca:443?transport=tcp'
+                  'turn:openrelay.metered.ca:80',
+                  'turn:openrelay.metered.ca:80?transport=tcp',
+                  'turn:openrelay.metered.ca:443',
+                  'turns:openrelay.metered.ca:443?transport=tcp'
                 ],
                 username: TURN_USERNAME,
                 credential: TURN_CREDENTIAL
