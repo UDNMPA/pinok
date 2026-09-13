@@ -373,25 +373,7 @@
     white-space:nowrap;
   }
   #netDiagLog{
-    position:fixed;
-    left:12px;
-    right:12px;
-    bottom:max(12px, env(safe-area-inset-bottom));
-    max-height:32vh;
-    overflow-y:auto;
-    background:rgba(10,10,20,0.88);
-    color:#9ef7c1;
-    font:11px/1.4 monospace;
-    padding:8px 10px;
-    border-radius:10px;
-    border:1px solid rgba(255,255,255,0.15);
-    white-space:pre-wrap;
-    word-break:break-word;
-    z-index:9999;
-    pointer-events:none;
-  }
-  #netDiagLog:empty{
-    display:none;
+    display:none !important;
   }
 
   /* Joystick */
@@ -2525,6 +2507,8 @@
       bubbleTimer: 0,
       pos: mesh.position.clone(),
       targetPos: mesh.position.clone(),
+      velocity: new THREE.Vector3(0,0,0), // estimated from consecutive network samples, used to dead-reckon between packets
+      lastSampleTime: 0,
       yaw: 0,
       targetYaw: 0,
       animT: 0,
@@ -2556,6 +2540,17 @@
     // every remote avatar at a fixed world-space height instead of
     // following the hill under their feet.
     var gy = getGroundY(s.x, s.z);
+    var now = performance.now() / 1000;
+    var dtSample = r.lastSampleTime ? Math.min(0.5, now - r.lastSampleTime) : 0;
+    if(dtSample > 0.001){
+      // estimate flat (x/z) velocity from the movement since the last
+      // packet, so we can keep dead-reckoning the avatar forward smoothly
+      // if the next packet is late or dropped, instead of it stalling
+      // dead in place on flaky/relayed connections.
+      r.velocity.x = (s.x - r.targetPos.x) / dtSample;
+      r.velocity.z = (s.z - r.targetPos.z) / dtSample;
+    }
+    r.lastSampleTime = now;
     r.targetPos.set(s.x, gy, s.z);
     r.targetYaw = s.yaw;
     r.walking = !!s.walking;
@@ -2574,6 +2569,16 @@
   function updateRemoteAvatars(dt){
     for(var pid in remotePlayers){
       var r = remotePlayers[pid];
+      // dead-reckon: keep nudging the target forward along the last known
+      // velocity between network packets, so a late/dropped packet on a
+      // relayed connection reads as a brief smooth glide instead of the
+      // avatar stalling dead in place until the next update arrives.
+      var sinceSample = r.lastSampleTime ? (performance.now()/1000 - r.lastSampleTime) : 0;
+      if(r.walking && sinceSample > 0.03 && sinceSample < 0.4){
+        r.targetPos.x += r.velocity.x * dt;
+        r.targetPos.z += r.velocity.z * dt;
+        r.targetPos.y = getGroundY(r.targetPos.x, r.targetPos.z);
+      }
       // smooth (lerp) toward the last received network sample so motion
       // reads fine even at ~15 updates/sec instead of stepping visibly
       r.pos.lerp(r.targetPos, Math.min(1, dt*12));
