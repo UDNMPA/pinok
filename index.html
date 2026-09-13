@@ -877,13 +877,10 @@
       return out;
     }
 
-    // TURN credentials from turnix.io (EU Central region), free tier, no
-    // credit card required. This credential was created with a long TTL
-    // (5000 days / ~13.7 years) directly in the turnix.io dashboard, so it
-    // behaves like a static long-lived credential rather than a short-lived
-    // token — no need to hit their REST API at runtime to mint one.
-    var TURN_USERNAME = 'e7b38fe0-4240-422a-8fa2-f4e1e41dff2a';
-    var TURN_CREDENTIAL = 'a8319b82c39258dbadfa3996c420f3bb';
+    // TURN credentials from metered.ca (global region, auto geo-routed to
+    // nearest edge). Replaces the previous turnix.io credential.
+    var TURN_USERNAME = 'H1fmhBtyDtTbEpa3';
+    var TURN_CREDENTIAL = '353e90e58d6cd9b600186d85';
 
     function makePeer(id, onOpen, onErr){
       var p;
@@ -894,20 +891,19 @@
             iceServers: [
               { urls: 'stun:stun.l.google.com:19302' },
               { urls: 'stun:stun1.l.google.com:19302' },
-              { urls: 'stun:stun.turnix.io:3478' },
+              { urls: 'stun:stun.relay.metered.ca:80' },
               // TURN relay fallback — required whenever either side is
               // behind a NAT that STUN alone can't traverse (very common
               // with mobile hotspot chains: phone-behind-hotspot-behind-
-              // carrier-NAT). Listing UDP, the 443 TCP port, and
-              // TLS-over-TCP together lets ICE pick whichever transport
-              // actually gets through the strictest of the two networks'
-              // firewalls.
+              // carrier-NAT). Listing plain UDP/TCP on 80 plus TLS-over-TCP
+              // on 443 together lets ICE pick whichever transport actually
+              // gets through the strictest of the two networks' firewalls.
               {
                 urls: [
-                  'turn:eu-central.turnix.io:3478?transport=udp',
-                  'turn:eu-central.turnix.io:3478?transport=tcp',
-                  'turns:eu-central.turnix.io:443?transport=udp',
-                  'turns:eu-central.turnix.io:443?transport=tcp'
+                  'turn:global.relay.metered.ca:80',
+                  'turn:global.relay.metered.ca:80?transport=tcp',
+                  'turn:global.relay.metered.ca:443',
+                  'turns:global.relay.metered.ca:443?transport=tcp'
                 ],
                 username: TURN_USERNAME,
                 credential: TURN_CREDENTIAL
@@ -976,8 +972,8 @@
         });
         pc.addEventListener('icecandidateerror', function(ev){
           NetDiag.log('ICE candidate ошибка (' + conn.peer + '): код ' + ev.errorCode + ' ' + (ev.errorText || '') + (ev.url ? (' [' + ev.url + ']') : ''));
-          if(ev.errorCode === 401 && ev.url && ev.url.indexOf('turnix.io') !== -1){
-            NetDiag.log('⚠ TURN-сервер turnix.io отклонил credentials (истёк срок действия или отозваны). См. TURN_USERNAME/TURN_CREDENTIAL в коде.');
+          if(ev.errorCode === 401 && ev.url && ev.url.indexOf('relay.metered.ca') !== -1){
+            NetDiag.log('⚠ TURN-сервер metered.ca отклонил credentials (истёк срок действия или отозваны). См. TURN_USERNAME/TURN_CREDENTIAL в коде.');
           }
         });
         pc.addEventListener('icecandidate', function(ev){
@@ -1806,6 +1802,22 @@
     exitMainZ: 26
   };
 
+  // KING OF THE HILL — a short dead-end branch on the opposite side (+X)
+  // from the locker room, closer to spawn, ending in a circular arena.
+  // Kept as a simple config block (mirroring LOCKER's shape) so the branch
+  // path and the zone itself are easy to reposition/resize later.
+  var HILL = {
+    branchZ: 6,       // forks off the main path lower down than the locker branch
+    branchX0: 0,
+    branchX1: 55,      // heads out to +X, away from the locker room's -X side; pushed further out to make room for the bigger hill
+    arenaX: 62,        // arena sits at the end of the branch
+    arenaZ: 6,
+    arenaRadius: 26,    // big, dominant hill footprint
+    hillHeight: 7.5,    // tall enough to feel like an actual climb, not a bump
+    capRadius: 10,      // flat top platform radius (where the red circle/contest zone lives)
+    redRadius: 5         // the red "stand here" circle painted on the summit
+  };
+
   var lockerZoneBounds = {
     minX: LOCKER.roomMinX, maxX: LOCKER.roomMaxX,
     minZ: LOCKER.roomMinZ, maxZ: LOCKER.roomMaxZ
@@ -1820,8 +1832,11 @@
   // GROUND — low poly hilly terrain
   // ---------------------------------------------------------------------
   function terrainHeight(x, z){
-    // flat map — no hills
-    return 0;
+    // flat map, except for the king-of-the-hill mound — added here (rather
+    // than only in the mesh-building code) so player movement, remote
+    // avatar placement, and dead-reckoning all agree on the same walkable
+    // height without needing separate special-casing at each call site.
+    return hillGroundHeight(x, z);
   }
 
   function setupGround(){
@@ -1884,6 +1899,145 @@
     return strip;
   }
 
+  var hillZoneMesh = null; // the red summit-circle mesh, used for the contest-zone check
+  var hillMound = null;
+
+  function isInHillZone(x, z){
+    var dx = x - HILL.arenaX, dz = z - HILL.arenaZ;
+    return (dx*dx + dz*dz) <= HILL.redRadius*HILL.redRadius;
+  }
+
+  // Height of the ground at (x,z) if it's inside the hill's footprint —
+  // a smooth cosine dome up to hillHeight, flattening out into the summit
+  // plateau near the center. Used both for the mesh geometry and so
+  // player movement can climb the mound instead of clipping through it.
+  function hillGroundHeight(x, z){
+    var dx = x - HILL.arenaX, dz = z - HILL.arenaZ;
+    var d = Math.sqrt(dx*dx + dz*dz);
+    if(d >= HILL.arenaRadius) return 0;
+    if(d <= HILL.capRadius) return HILL.hillHeight;
+    var t = (d - HILL.capRadius) / (HILL.arenaRadius - HILL.capRadius); // 0 at cap edge, 1 at outer base
+    return HILL.hillHeight * (0.5 + 0.5*Math.cos(t * Math.PI)); // smooth dome falloff, no hard seam at the base
+  }
+
+  function setupHillArena(){
+    // the mound itself: a low-poly dome built by radially extruding
+    // hillGroundHeight, so the slope is smooth and the flat summit
+    // plateau is clearly walkable ground rather than a floating disc.
+    // Segment counts scaled up with the bigger footprint so the silhouette
+    // still reads as smoothly curved rather than faceted into big slabs.
+    var radialSegs = 40, ringSegs = 16;
+    var geo = new THREE.BufferGeometry();
+    var verts = [], indices = [];
+    // center point (summit middle)
+    verts.push(HILL.arenaX, HILL.hillHeight, HILL.arenaZ);
+    for(var ring=1; ring<=ringSegs; ring++){
+      var d = (ring/ringSegs) * HILL.arenaRadius;
+      for(var seg=0; seg<radialSegs; seg++){
+        var ang = (seg/radialSegs) * Math.PI*2;
+        var vx = HILL.arenaX + Math.cos(ang)*d;
+        var vz = HILL.arenaZ + Math.sin(ang)*d;
+        var vy = hillGroundHeight(vx, vz);
+        verts.push(vx, vy, vz);
+      }
+    }
+    // fan the innermost ring to the center point
+    for(var s=0; s<radialSegs; s++){
+      var a = 1 + s, b = 1 + ((s+1)%radialSegs);
+      indices.push(0, a, b);
+    }
+    // stitch consecutive rings
+    for(var r=0; r<ringSegs-1; r++){
+      var base0 = 1 + r*radialSegs;
+      var base1 = 1 + (r+1)*radialSegs;
+      for(var s2=0; s2<radialSegs; s2++){
+        var a0 = base0 + s2, a1 = base0 + ((s2+1)%radialSegs);
+        var b0 = base1 + s2, b1 = base1 + ((s2+1)%radialSegs);
+        indices.push(a0, b0, a1);
+        indices.push(a1, b0, b1);
+      }
+    }
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+    geo.setIndex(indices);
+    // Mountain-style banded coloring, painted per-triangle (not per-vertex
+    // gradient) so each low-poly face reads as a single flat-shaded tile —
+    // grass at the base, bare dirt/rock through the slope, pale stone near
+    // the summit rim, with a bit of per-face random tint so the bands
+    // don't look like a flat, uniform gradient.
+    geo = geo.toNonIndexed(); // duplicate verts per-triangle so each face can get its own color
+    var pos = geo.attributes.position;
+    var triColors = [];
+    var bandGrass = new THREE.Color(0x4fae5a);
+    var bandDirt  = new THREE.Color(0x8a7452);
+    var bandRock  = new THREE.Color(0x8f8f8f);
+    var bandStone = new THREE.Color(0xc9c9c9);
+    for(var tri=0; tri<pos.count; tri+=3){
+      // average height of the triangle decides its band
+      var y0=pos.getY(tri), y1=pos.getY(tri+1), y2=pos.getY(tri+2);
+      var avgY = (y0+y1+y2)/3;
+      var t = THREE.MathUtils.clamp(avgY / HILL.hillHeight, 0, 1);
+      var col;
+      if(t < 0.35){
+        col = bandGrass.clone().lerp(bandDirt, t/0.35);
+      } else if(t < 0.7){
+        col = bandDirt.clone().lerp(bandRock, (t-0.35)/0.35);
+      } else {
+        col = bandRock.clone().lerp(bandStone, (t-0.7)/0.3);
+      }
+      // small per-face random tint so adjacent low-poly facets read as
+      // distinct tiles (the same trick that gives the character its
+      // faceted-crystal look) instead of one smooth painted gradient
+      var noise = (Math.random() - 0.5) * 0.09;
+      col.r = THREE.MathUtils.clamp(col.r + noise, 0, 1);
+      col.g = THREE.MathUtils.clamp(col.g + noise, 0, 1);
+      col.b = THREE.MathUtils.clamp(col.b + noise, 0, 1);
+      for(var k=0;k<3;k++) triColors.push(col.r, col.g, col.b);
+    }
+    geo.setAttribute('color', new THREE.Float32BufferAttribute(triColors, 3));
+    geo.computeVertexNormals();
+    var mat = new THREE.MeshStandardMaterial({ vertexColors:true, flatShading:true, roughness:0.95 });
+    hillMound = new THREE.Mesh(geo, mat);
+    hillMound.receiveShadow = true;
+    hillMound.castShadow = true;
+    scene.add(hillMound);
+
+    // red contest circle painted flat on the summit plateau
+    var redGeo = new THREE.CircleGeometry(HILL.redRadius, 28);
+    redGeo.rotateX(-Math.PI/2);
+    var redMat = new THREE.MeshStandardMaterial({
+      color:0xe23b3b, flatShading:true, roughness:0.8,
+      emissive:0x550000, emissiveIntensity:0.2
+    });
+    hillZoneMesh = new THREE.Mesh(redGeo, redMat);
+    hillZoneMesh.position.set(HILL.arenaX, HILL.hillHeight + 0.02, HILL.arenaZ);
+    hillZoneMesh.receiveShadow = true;
+    scene.add(hillZoneMesh);
+
+    // thin white rim on the red circle so its edge reads clearly against the grass-green plateau
+    var rimGeo = new THREE.TorusGeometry(HILL.redRadius, 0.1, 6, 28);
+    rimGeo.rotateX(-Math.PI/2);
+    var rimMat = new THREE.MeshStandardMaterial({ color:0xffffff, flatShading:true, roughness:0.7 });
+    var rim = new THREE.Mesh(rimGeo, rimMat);
+    rim.position.set(HILL.arenaX, HILL.hillHeight + 0.06, HILL.arenaZ);
+    rim.castShadow = true;
+    scene.add(rim);
+
+    // signpost at the base of the hill, near where the branch path arrives
+    var poleGeo = new THREE.CylinderGeometry(0.06, 0.06, 2.2, 6);
+    var poleMat = new THREE.MeshStandardMaterial({ color:0x8a8fa3, flatShading:true, roughness:0.6 });
+    var pole = new THREE.Mesh(poleGeo, poleMat);
+    var poleX = HILL.arenaX - HILL.arenaRadius - 0.3;
+    pole.position.set(poleX, 1.1, HILL.arenaZ);
+    pole.castShadow = true;
+    scene.add(pole);
+
+    makeSignPlaque(
+      poleX, 2.2, HILL.arenaZ,
+      Math.PI/2,
+      'ЦАРЬ ГОРЫ', 'Забирайся и стой на красном дольше всех'
+    );
+  }
+
   function setupPathAndLocker(){
     // main path: straight strip from just behind spawn out into the field,
     // running through the fork point so the branch reads as a clear
@@ -1897,6 +2051,11 @@
     addPathSegment(LOCKER.exitRoomX, LOCKER.exitRoomZ, 0, LOCKER.exitMainZ, PATH_WIDTH);
 
     setupLockerRoom();
+
+    // king-of-the-hill branch: short dead-end fork to +X, opposite side
+    // from the locker room and closer to spawn, per the sketched layout
+    addPathSegment(HILL.branchX0, HILL.branchZ, HILL.branchX1, HILL.branchZ, PATH_WIDTH);
+    setupHillArena();
   }
 
   // ---------------------------------------------------------------------
@@ -3096,6 +3255,7 @@
 
   var PLAYER_KICK_FORCE = 13;
   var PLAYER_KICK_UP = 7;
+  var KNOCK_GRAVITY = -18; // matches updateDummyPhysics's GRAVITY so a kicked player and a kicked dummy arc the same way
 
   function doKick(){
     if(kickCooldown > 0) return;
@@ -3620,12 +3780,38 @@
       playerState.velocity.z *= 0.8;
     }
 
-    // apply knockback (from explosions) on top of walk velocity
+    // apply knockback (from explosions/kicks) on top of walk velocity
     playerState.pos.x += (playerState.velocity.x + playerState.knockVel.x) * dt;
     playerState.pos.z += (playerState.velocity.z + playerState.knockVel.z) * dt;
 
-    // decay knockback
-    playerState.knockVel.multiplyScalar(0.9);
+    // vertical knockback: same gravity-and-bounce feel as the dummies get
+    // when kicked, instead of silently discarding knockVel.y. Without this
+    // a kicked player only ever slid along the ground — no airtime — which
+    // read as a much weaker hit than the dummy's dramatic launch even when
+    // the underlying force was identical.
+    var groundYHere = getGroundY(playerState.pos.x, playerState.pos.z);
+    if(playerState.knockVel.y !== 0 || playerState.pos.y > groundYHere){
+      playerState.knockVel.y += KNOCK_GRAVITY * dt;
+      playerState.pos.y += playerState.knockVel.y * dt;
+      if(playerState.pos.y <= groundYHere){
+        playerState.pos.y = groundYHere;
+        if(Math.abs(playerState.knockVel.y) > 1.5){
+          // small bounce with energy loss, mirroring the dummy's landing feel
+          playerState.knockVel.y *= -0.35;
+        } else {
+          playerState.knockVel.y = 0;
+        }
+      }
+    } else {
+      playerState.pos.y = groundYHere;
+    }
+
+    // decay horizontal knockback slowly (matches the dummies' near-frictionless
+    // air drag of 0.995/frame) rather than the old 0.9/frame, which killed
+    // almost all of a kick's momentum within a couple of frames and made
+    // kicking a player feel like a shove instead of the same hit a dummy gets
+    playerState.knockVel.x *= 0.995;
+    playerState.knockVel.z *= 0.995;
 
     // solid rocks: push the player back out if walking into one
     resolveRockCollisions(playerState.pos, playerState.radius);
