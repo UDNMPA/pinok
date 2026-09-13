@@ -745,7 +745,21 @@
           config: {
             iceServers: [
               { urls: 'stun:stun.l.google.com:19302' },
-              { urls: 'stun:stun1.l.google.com:19302' }
+              { urls: 'stun:stun1.l.google.com:19302' },
+              // TURN relay fallback — required when at least one side is
+              // behind a NAT that STUN alone can't traverse (very common on
+              // mobile/carrier networks). Without this, two phones on
+              // cellular data frequently can never establish a direct P2P
+              // link even though signalling succeeds and the room "exists".
+              {
+                urls: [
+                  'turn:openrelay.metered.ca:80',
+                  'turn:openrelay.metered.ca:443',
+                  'turn:openrelay.metered.ca:443?transport=tcp'
+                ],
+                username: 'openrelayproject',
+                credential: 'openrelayproject'
+              }
             ]
           }
         });
@@ -954,7 +968,11 @@
 
     function describeError(err){
       var type = err && err.type;
-      if(type === 'peer-unavailable') return 'Комната не найдена. Проверь код.';
+      // NOTE: PeerJS reports 'peer-unavailable' both when the room code is
+      // genuinely wrong AND when the host exists but the connection
+      // couldn't be negotiated (commonly restrictive mobile/carrier NAT).
+      // The message below covers both without being misleading either way.
+      if(type === 'peer-unavailable') return 'Не удалось подключиться. Проверь код, а если он верный — попробуйте другую сеть (мобильный интернет иногда блокирует прямое подключение).';
       if(type === 'network' || type === 'server-error' || type === 'socket-error' || type === 'socket-closed') return 'Нет соединения с сетью. Проверь интернет.';
       if(type === 'unavailable-id') return 'Не удалось создать комнату, попробуй ещё раз.';
       if(type === 'browser-incompatible') return 'Браузер не поддерживает P2P-соединения.';
