@@ -796,6 +796,15 @@
       return out;
     }
 
+    // ⚠️ REPLACE THESE with your own free Metered.ca Open Relay credentials.
+    // The shared public openrelayproject/openrelayproject login is
+    // currently rejecting allocations (error 400) — it's been overused by
+    // countless unrelated projects and is throttled/banned as a result.
+    // Sign up free (20 GB/mo) at https://www.metered.ca/tools/openrelay/,
+    // then paste your personal username/credential from the dashboard here.
+    var TURN_USERNAME = '353e90e58d6cd9b600186d85';
+    var TURN_CREDENTIAL = 'H1fmhBtyDtTbEpa3';
+
     function makePeer(id, onOpen, onErr){
       var p;
       try{
@@ -805,13 +814,13 @@
             iceServers: [
               { urls: 'stun:stun.l.google.com:19302' },
               { urls: 'stun:stun1.l.google.com:19302' },
-              // Free, no-signup-required TURN relay (openrelay.metered.ca) —
-              // required whenever either side is behind a NAT that STUN
-              // alone can't traverse (very common with mobile hotspot
-              // chains: phone-behind-hotspot-behind-carrier-NAT). Listing
-              // UDP, the 443 TCP port, and TLS-over-TCP together lets ICE
-              // pick whichever transport actually gets through the
-              // strictest of the two networks' firewalls.
+              // TURN relay fallback — required whenever either side is
+              // behind a NAT that STUN alone can't traverse (very common
+              // with mobile hotspot chains: phone-behind-hotspot-behind-
+              // carrier-NAT). Listing UDP, the 443 TCP port, and
+              // TLS-over-TCP together lets ICE pick whichever transport
+              // actually gets through the strictest of the two networks'
+              // firewalls.
               {
                 urls: [
                   'turn:openrelay.metered.ca:80',
@@ -820,8 +829,8 @@
                   'turn:openrelay.metered.ca:443?transport=tcp',
                   'turns:openrelay.metered.ca:443?transport=tcp'
                 ],
-                username: 'openrelayproject',
-                credential: 'openrelayproject'
+                username: TURN_USERNAME,
+                credential: TURN_CREDENTIAL
               }
             ]
           }
@@ -887,6 +896,9 @@
         });
         pc.addEventListener('icecandidateerror', function(ev){
           NetDiag.log('ICE candidate ошибка (' + conn.peer + '): код ' + ev.errorCode + ' ' + (ev.errorText || '') + (ev.url ? (' [' + ev.url + ']') : ''));
+          if(ev.errorCode === 400 && ev.url && ev.url.indexOf('openrelay.metered.ca') !== -1){
+            NetDiag.log('⚠ TURN-сервер отклонил общие credentials (перегружены/забанены). Нужен личный ключ — см. TURN_USERNAME/TURN_CREDENTIAL в коде.');
+          }
         });
         pc.addEventListener('icecandidate', function(ev){
           if(!ev.candidate) return;
