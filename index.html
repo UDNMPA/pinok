@@ -53,6 +53,17 @@
   }
   #app{ position:fixed; inset:0; width:100%; height:100%; }
   canvas#gameCanvas{ position:absolute; inset:0; display:block; width:100%; height:100%; }
+  body.pc-mode canvas#gameCanvas{ cursor:crosshair; }
+  body.pc-mode.pointer-locked canvas#gameCanvas{ cursor:none; }
+
+  /* subtle vignette over the 3D view for a bit of atmosphere/depth — pure
+     CSS, no render cost, sits above the canvas but below all HUD elements
+     and never intercepts touches/clicks */
+  #vignette{
+    position:fixed; inset:0; z-index:10;
+    pointer-events:none;
+    background: radial-gradient(ellipse at center, rgba(0,0,0,0) 55%, rgba(0,0,0,0.28) 100%);
+  }
 
   /* ---------- START SCREEN ---------- */
   #startScreen{
@@ -101,6 +112,37 @@
     transform: translateY(6px);
     box-shadow: 0 2px 0 var(--yellow-dark), 0 6px 14px rgba(0,0,0,0.3);
   }
+  #tapButton:disabled{
+    opacity:0.4;
+    cursor:default;
+    animation:none;
+  }
+  #tapButton:disabled:active{
+    transform:none;
+    box-shadow: 0 8px 0 var(--yellow-dark), 0 14px 24px rgba(0,0,0,0.35);
+  }
+  #nicknameInput{
+    font-family:'Baloo 2', sans-serif;
+    font-weight:700;
+    font-size:clamp(16px, 4.5vw, 20px);
+    color:var(--paper);
+    background:rgba(245,245,255,0.08);
+    border:3px solid var(--violet);
+    border-radius:16px;
+    padding:14px 18px;
+    text-align:center;
+    text-transform:uppercase;
+    width:100%;
+    max-width:220px;
+    outline:none;
+  }
+  #nicknameInput::placeholder{
+    color:rgba(245,245,255,0.35);
+    text-transform:none;
+  }
+  #nicknameInput:focus{
+    border-color:var(--yellow);
+  }
   @keyframes floaty{
     0%,100%{ transform:translateY(0); }
     50%{ transform:translateY(-8px); }
@@ -121,8 +163,9 @@
   #topBar{
     position:absolute; top:0; left:0; right:0;
     display:flex; justify-content:center; align-items:flex-start;
-    gap:10px;
-    padding-top: max(14px, env(safe-area-inset-top));
+    flex-wrap:wrap;
+    gap:8px;
+    padding: max(14px, env(safe-area-inset-top)) 10px 0;
   }
   #topBadge{
     background:rgba(26,27,46,0.72);
@@ -149,6 +192,35 @@
   }
   #settingsBtn:active{
     transform: scale(0.88);
+  }
+  #kickCounter{
+    background:rgba(26,27,46,0.72);
+    border:3px solid var(--coral);
+    border-radius:18px;
+    color:var(--paper);
+    font-weight:800;
+    font-size:15px;
+    padding:8px 16px;
+    letter-spacing:0.5px;
+    backdrop-filter: blur(4px);
+    display:flex; align-items:center; gap:6px;
+    transition: transform 0.15s cubic-bezier(.2,1.4,.4,1);
+  }
+  #kickCounter.pulse{
+    animation: kickCounterPulse 0.3s cubic-bezier(.2,1.4,.4,1);
+  }
+  @keyframes kickCounterPulse{
+    0%{ transform:scale(1); }
+    50%{ transform:scale(1.18); }
+    100%{ transform:scale(1); }
+  }
+  /* narrow phones: shrink the badges and drop the long subtitle so the
+     three top-bar items (badge, kick counter, settings) fit on one row
+     without wrapping over the proximity hint below them */
+  @media (max-width: 380px){
+    #topBadge{ font-size:12px; padding:7px 12px; }
+    #topBadge .subtitle{ display:none; }
+    #kickCounter{ font-size:13px; padding:7px 12px; }
   }
 
   /* ---------- SETTINGS PANEL ---------- */
@@ -404,6 +476,13 @@
     pointer-events:auto;
     z-index:2;
   }
+  /* On desktop (no touch, mouse-driven) WASD replaces the on-screen
+     joystick, so it's hidden to keep the view clean — the joystick's
+     mouse-drag fallback still exists in code but isn't needed once WASD
+     is available. */
+  body.pc-mode #joystickZone{
+    display:none;
+  }
   #joyBase{
     position:absolute; inset:0;
     border-radius:50%;
@@ -430,6 +509,33 @@
     left:38%;
     pointer-events:auto;
     z-index:1;
+  }
+  /* On desktop, looking is handled by real mouse-look (pointer lock) across
+     the whole canvas rather than a drag zone limited to the right side */
+  body.pc-mode #lookZone{
+    left:0;
+  }
+
+  /* Small desktop-only hint + click-to-play overlay for enabling mouse-look */
+  #pcHint{
+    display:none;
+    position:absolute;
+    left:50%; top: max(70px, calc(64px + env(safe-area-inset-top) + 10px));
+    transform:translateX(-50%);
+    background:rgba(0,0,0,0.55);
+    color:#fff;
+    font-size:13px;
+    padding:8px 14px;
+    border-radius:10px;
+    z-index:5;
+    pointer-events:none;
+    white-space:nowrap;
+  }
+  body.pc-mode #pcHint{
+    display:block;
+  }
+  body.pc-mode.pointer-locked #pcHint{
+    display:none;
   }
 
   /* Action buttons */
@@ -578,6 +684,74 @@
   }
   .thoughtBubble.show{ display:block; }
 
+  /* ---------- HIT-TEXT POPUPS (juice on every kick) ---------- */
+  #hitTextLayer{
+    position:fixed; inset:0; z-index:25;
+    pointer-events:none;
+    overflow:hidden;
+  }
+  .hitText{
+    position:absolute;
+    left:50%; top:42%;
+    transform:translate(-50%,-50%) scale(0.4) rotate(var(--rot, -4deg));
+    font-weight:800;
+    font-size:clamp(26px, 8vw, 40px);
+    color:var(--yellow);
+    -webkit-text-stroke: 2px var(--ink);
+    text-shadow: 0 4px 0 var(--ink), 0 8px 16px rgba(0,0,0,0.4);
+    letter-spacing:0.5px;
+    white-space:nowrap;
+    opacity:0;
+    animation: hitTextPop 0.7s cubic-bezier(.2,1.3,.4,1) forwards;
+  }
+  @keyframes hitTextPop{
+    0%{ opacity:0; transform:translate(-50%,-50%) scale(0.3) rotate(var(--rot, -4deg)); }
+    18%{ opacity:1; transform:translate(-50%,-50%) scale(1.15) rotate(var(--rot, -4deg)); }
+    32%{ transform:translate(-50%,-50%) scale(0.95) rotate(var(--rot, -4deg)); }
+    75%{ opacity:1; transform:translate(-50%,-58%) scale(1) rotate(var(--rot, -4deg)); }
+    100%{ opacity:0; transform:translate(-50%,-72%) scale(0.9) rotate(var(--rot, -4deg)); }
+  }
+
+  /* ---------- COMBO COUNTER ---------- */
+  #comboBadge{
+    position:fixed;
+    left:50%; top:calc(42% + 62px);
+    transform:translateX(-50%) scale(0.5);
+    z-index:24;
+    background:var(--coral);
+    color:var(--paper);
+    font-weight:800;
+    font-size:16px;
+    padding:6px 16px;
+    border-radius:14px;
+    box-shadow:0 5px 0 var(--coral-dark);
+    opacity:0;
+    pointer-events:none;
+    white-space:nowrap;
+    transition: opacity 0.12s ease;
+  }
+  #comboBadge.show{
+    opacity:1;
+    animation: comboPulse 0.35s cubic-bezier(.2,1.4,.4,1);
+  }
+  @keyframes comboPulse{
+    0%{ transform:translateX(-50%) scale(0.6); }
+    55%{ transform:translateX(-50%) scale(1.25); }
+    100%{ transform:translateX(-50%) scale(1); }
+  }
+
+  /* screen shake, triggered briefly on kicks/explosions for extra juice */
+  @keyframes screenShake{
+    0%{ transform:translate(0,0); }
+    20%{ transform:translate(-3px,2px); }
+    40%{ transform:translate(3px,-2px); }
+    60%{ transform:translate(-2px,-1px); }
+    80%{ transform:translate(2px,1px); }
+    100%{ transform:translate(0,0); }
+  }
+  #app.shake{ animation: screenShake 0.28s ease; }
+  #app.shakeBig{ animation: screenShake 0.45s ease; }
+
   /* prompt bubble e.g. "МОЖНО ПНУТЬ!" */
   #proximityHint{
     position:absolute;
@@ -600,6 +774,86 @@
     transform:translate(-50%,-50%) scale(1);
   }
 
+  /* ---------- KING OF THE HILL PANEL ---------- */
+  #hillPanel{
+    position:absolute;
+    top:70px; left:12px;
+    z-index:21;
+    background:rgba(26,27,46,0.72);
+    border:3px solid var(--coral);
+    border-radius:16px;
+    padding:10px 12px;
+    min-width:118px;
+    max-width:150px;
+    backdrop-filter: blur(4px);
+    display:none;
+    pointer-events:none;
+  }
+  #hillPanel.show{ display:block; }
+  #hillTimer{
+    color:var(--paper);
+    font-weight:800;
+    font-size:22px;
+    text-align:center;
+    letter-spacing:0.5px;
+    margin-bottom:8px;
+    text-shadow:0 2px 0 rgba(0,0,0,0.35);
+  }
+  #hillTimer.active{ color:var(--yellow); }
+  .hillPlayerRow{
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    gap:8px;
+    color:rgba(245,245,255,0.85);
+    font-weight:700;
+    font-size:12px;
+    padding:3px 0;
+    white-space:nowrap;
+    overflow:hidden;
+  }
+  .hillPlayerRow .hName{
+    overflow:hidden;
+    text-overflow:ellipsis;
+  }
+  .hillPlayerRow.leading .hName{ color:var(--yellow); }
+  .hillPlayerRow .hTime{
+    color:rgba(245,245,255,0.6);
+    font-size:11px;
+    flex-shrink:0;
+  }
+  .hillPlayerRow.leading .hTime{ color:var(--yellow); }
+
+  /* full-screen fade used for the nuke flash and the return-to-spawn transition */
+  #screenFade{
+    position:fixed; inset:0; z-index:45;
+    background:#000;
+    opacity:0;
+    pointer-events:none;
+    transition: opacity 0.6s ease;
+  }
+  #screenFade.show{ opacity:1; }
+
+  /* small centered banner shown while controls are locked for the finale */
+  #hillBanner{
+    position:fixed;
+    left:50%; top:38%;
+    transform:translate(-50%,-50%);
+    z-index:46;
+    color:var(--paper);
+    font-weight:800;
+    font-size:clamp(20px,6vw,30px);
+    text-align:center;
+    text-shadow:0 4px 0 rgba(0,0,0,0.5), 0 8px 16px rgba(0,0,0,0.4);
+    opacity:0;
+    transition: opacity 0.4s ease;
+    pointer-events:none;
+    padding:0 20px;
+    white-space:pre-line;
+    line-height:1.3;
+  }
+  #hillBanner.show{ opacity:1; }
+
   /* orientation notice (informational only, game works both ways) */
   #rotateNotice{
     position:fixed; inset:0; z-index:60;
@@ -619,14 +873,17 @@
 
 <div id="app">
   <canvas id="gameCanvas"></canvas>
+  <div id="vignette"></div>
 
   <!-- START SCREEN -->
   <div id="startScreen">
     <div class="logo">ПИНОК<span>.IO</span></div>
     <div class="sub">Беги, пинай манекенов и взрывай всё динамитом</div>
     <div class="hint" style="margin-top:-6px;opacity:0.5;">v2</div>
-    <button id="tapButton">ТАП ЧТОБЫ НАЧАТЬ</button>
+    <input id="nicknameInput" maxlength="8" placeholder="ТВОЙ НИК" autocomplete="off" autocapitalize="off">
+    <button id="tapButton" disabled>ТАП ЧТОБЫ НАЧАТЬ</button>
     <div class="hint">Полноэкранный режим включится автоматически</div>
+    <div class="hint" style="opacity:0.35;font-size:10px;margin-top:2px;">Мультяшное фентези-насилие. Динамит и «бомба» — стилизованные игровые эффекты, не связаны с реальным оружием.</div>
   </div>
 
   <!-- MODE SELECT: single player / host / join -->
@@ -668,11 +925,21 @@
   <!-- HUD -->
   <div id="hud">
     <div id="topBar">
-      <div id="topBadge">ПИНОК.IO — тест-полигон · v2</div>
+      <div id="topBadge">ПИНОК.IO<span class="subtitle"> — тест-полигон · v2</span></div>
+      <div id="kickCounter">👟 <span id="kickCounterVal">0</span></div>
       <button id="settingsBtn" aria-label="Настройки">⚙️</button>
     </div>
 
     <div id="proximityHint">👟 МОЖНО ПНУТЬ!</div>
+    <div id="hitTextLayer"></div>
+    <div id="comboBadge"></div>
+
+    <!-- King of the Hill: side panel with the big countdown-to-win timer
+         and a per-player list showing how long each has held the circle -->
+    <div id="hillPanel">
+      <div id="hillTimer">60.0</div>
+      <div id="hillPlayerList"></div>
+    </div>
 
     <div id="joystickZone">
       <div id="joyBase"></div>
@@ -680,6 +947,7 @@
     </div>
 
     <div id="lookZone"></div>
+    <div id="pcHint">WASD — движение · Мышь — обзор (клик по экрану) · Пробел — пинок · F — динамит</div>
 
     <div id="actionZone">
       <button id="kickBtn" class="actionBtn disabled">
@@ -721,6 +989,11 @@
       </div>
     </div>
   </div>
+
+  <!-- King of the Hill finale: black fade used both when the nuke drops
+       (quick) and when players are teleported back to spawn (slow) -->
+  <div id="screenFade"></div>
+  <div id="hillBanner"></div>
 </div>
 
 <script>
@@ -741,6 +1014,8 @@
   // ---------------------------------------------------------------------
   var startScreen = document.getElementById('startScreen');
   var tapButton = document.getElementById('tapButton');
+  var nicknameInput = document.getElementById('nicknameInput');
+  var myNickname = '';
   var hud = document.getElementById('hud');
   var canvas = document.getElementById('gameCanvas');
 
@@ -1052,11 +1327,11 @@
     }
 
     // ---- HOST ----
-    function hostCreateRoom(displayCb){
+    function hostCreateRoom(nickname, displayCb){
       state.role = 'host';
       state.myId = 'host';
       state.roomCode = randomCode(6);
-      state.players = { host: { name: 'Хост', connected: true } };
+      state.players = { host: { name: nickname || 'Хост', connected: true } };
 
       NetDiag.clear();
       NetDiag.log('Создаём комнату, код ' + state.roomCode + '…');
@@ -1124,7 +1399,16 @@
 
     function handleHostMessage(pid, msg){
       if(!msg || !msg.t) return;
-      if(msg.t === 'input'){
+      if(msg.t === 'hello'){
+        // guest telling us their chosen nickname — replace the placeholder
+        // name assigned in wireHostConnection and let everyone know
+        var name = (msg.name || '').trim().slice(0, 8);
+        if(name && state.players[pid]){
+          state.players[pid].name = name;
+          fireListChange();
+          broadcastToGuests({ t:'roster', players: state.players });
+        }
+      } else if(msg.t === 'input'){
         // relay this guest's live state to everyone else immediately;
         // the host's own animate() loop folds it into the authoritative
         // snapshot it broadcasts every tick.
@@ -1156,7 +1440,7 @@
     }
 
     // ---- GUEST ----
-    function guestJoinRoom(code, displayCb){
+    function guestJoinRoom(code, nickname, displayCb){
       state.role = 'guest';
       state.roomCode = code;
 
@@ -1185,6 +1469,9 @@
         conn.on('open', function(){
           state.hostConn = conn;
           NetDiag.log('Канал данных с хостом открыт');
+          // tell the host our chosen nickname so it doesn't have to fall
+          // back to an auto-generated "Игрок XXXX" label
+          conn.send({ t:'hello', name: nickname || '' });
         });
 
         conn.on('data', function(msg){
@@ -1326,6 +1613,8 @@
 
   function onStartTap(){
     if(gameStarted) return;
+    if(tapButton.disabled) return; // no nickname entered yet
+    myNickname = nicknameInput.value.trim().slice(0, 8);
     requestFullscreenSafe(document.documentElement);
     // lock orientation if supported (best-effort, ignore failures)
     try{
@@ -1358,6 +1647,23 @@
 
   tapButton.addEventListener('click', onStartTap);
   tapButton.addEventListener('touchend', function(e){ e.preventDefault(); onStartTap(); }, {passive:false});
+
+  // nickname gate: tap button stays disabled until 1-8 non-space characters
+  // are entered, so every player always has a real name before playing
+  function refreshTapButtonState(){
+    var val = nicknameInput.value.trim();
+    tapButton.disabled = (val.length < 1 || val.length > 8);
+  }
+  nicknameInput.addEventListener('input', function(){
+    // enforce the 8-char cap defensively (maxlength already does this for
+    // typing, but paste can bypass it on some mobile keyboards)
+    if(nicknameInput.value.length > 8) nicknameInput.value = nicknameInput.value.slice(0, 8);
+    refreshTapButtonState();
+  });
+  nicknameInput.addEventListener('keydown', function(e){
+    if(e.key === 'Enter' && !tapButton.disabled) onStartTap();
+  });
+  refreshTapButtonState();
 
   // ---------------------------------------------------------------------
   // MULTIPLAYER MENU WIRING
@@ -1404,7 +1710,7 @@
     Net.state.onPlayerListChange = renderLobbyPlayers;
     Net.state.onError = function(msg){ netStatus.textContent = msg; };
 
-    Net.hostCreateRoom(function(err, code){
+    Net.hostCreateRoom(myNickname, function(err, code){
       if(err){
         netStatus.textContent = err;
         return;
@@ -1444,7 +1750,7 @@
     Net.state.onPlayerListChange = renderLobbyPlayers;
     Net.state.onError = function(msg){ netStatus.textContent = msg; };
 
-    Net.guestJoinRoom(code, function(err, joinedCode){
+    Net.guestJoinRoom(code, myNickname, function(err, joinedCode){
       roomJoinConfirmBtn.disabled = false;
       roomJoinConfirmBtn.textContent = 'ПОДКЛЮЧИТЬСЯ';
       if(err){
@@ -1563,13 +1869,16 @@
       osc.stop(t + 0.1);
     }
 
-    // ---- kick impact: punchy thump + noise crack, positional ----
+    // ---- kick impact: punchy thump + noise crack + a light cartoon "pop"
+    // on top, positional. Slight per-hit pitch randomization so repeated
+    // kicks don't sound identically robotic. ----
     function playKick(worldPos){
       if(!ready) return;
       resumeIfNeeded();
       var g = distanceGain(worldPos);
       if(g <= 0) return;
       var t = ctx.currentTime;
+      var pitchVar = 0.92 + Math.random()*0.16; // ±8% random pitch per kick
 
       var localGain = ctx.createGain();
       localGain.gain.value = g;
@@ -1578,10 +1887,10 @@
       // low thump
       var osc = ctx.createOscillator();
       osc.type = 'sine';
-      osc.frequency.setValueAtTime(180, t);
-      osc.frequency.exponentialRampToValueAtTime(45, t + 0.15);
+      osc.frequency.setValueAtTime(180 * pitchVar, t);
+      osc.frequency.exponentialRampToValueAtTime(45 * pitchVar, t + 0.15);
       var oscGain = ctx.createGain();
-      oscGain.gain.setValueAtTime(0.5, t);
+      oscGain.gain.setValueAtTime(0.55, t);
       oscGain.gain.exponentialRampToValueAtTime(0.001, t + 0.18);
       osc.connect(oscGain);
       oscGain.connect(localGain);
@@ -1595,13 +1904,91 @@
       noiseFilter.type = 'highpass';
       noiseFilter.frequency.value = 1200;
       var noiseGain = ctx.createGain();
-      noiseGain.gain.setValueAtTime(0.35, t);
+      noiseGain.gain.setValueAtTime(0.38, t);
       noiseGain.gain.exponentialRampToValueAtTime(0.001, t + 0.06);
       noise.connect(noiseFilter);
       noiseFilter.connect(noiseGain);
       noiseGain.connect(localGain);
       noise.start(t);
       noise.stop(t + 0.07);
+
+      // extra cartoon "pop" — a quick upward pitch-blip riding just after
+      // the thump, gives kicks a bouncy/comedic edge instead of just "thud"
+      var pop = ctx.createOscillator();
+      pop.type = 'triangle';
+      pop.frequency.setValueAtTime(320 * pitchVar, t + 0.02);
+      pop.frequency.exponentialRampToValueAtTime(700 * pitchVar, t + 0.09);
+      var popGain = ctx.createGain();
+      popGain.gain.setValueAtTime(0.0001, t + 0.02);
+      popGain.gain.exponentialRampToValueAtTime(0.18, t + 0.035);
+      popGain.gain.exponentialRampToValueAtTime(0.0001, t + 0.11);
+      pop.connect(popGain);
+      popGain.connect(localGain);
+      pop.start(t + 0.02);
+      pop.stop(t + 0.12);
+    }
+
+    // ---- combo stinger: short ascending chime, non-positional (always full
+    // volume, it's a UI/feedback cue not a world sound). Pitch rises with
+    // combo count so bigger streaks literally sound more exciting. ----
+    function playCombo(comboCount){
+      if(!ready) return;
+      resumeIfNeeded();
+      var t = ctx.currentTime;
+      var localGain = ctx.createGain();
+      localGain.gain.value = 0.9;
+      localGain.connect(masterGain);
+
+      var baseFreq = 520 + Math.min(comboCount, 8) * 55;
+      var notes = [baseFreq, baseFreq*1.25, baseFreq*1.5];
+      for(var i=0;i<notes.length;i++){
+        var osc = ctx.createOscillator();
+        osc.type = 'square';
+        osc.frequency.value = notes[i];
+        var gain = ctx.createGain();
+        var start = t + i*0.045;
+        gain.gain.setValueAtTime(0.0001, start);
+        gain.gain.exponentialRampToValueAtTime(0.16, start + 0.015);
+        gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.12);
+        osc.connect(gain);
+        gain.connect(localGain);
+        osc.start(start);
+        osc.stop(start + 0.14);
+      }
+    }
+
+    // ---- dummy "yelp": a quick cartoon squeak/honk when a dummy or player
+    // gets launched by a kick, positional. Randomized pitch so a row of
+    // hits doesn't sound like the same clip looping. ----
+    function playYelp(worldPos){
+      if(!ready) return;
+      resumeIfNeeded();
+      var g = distanceGain(worldPos);
+      if(g <= 0) return;
+      var t = ctx.currentTime;
+      var localGain = ctx.createGain();
+      localGain.gain.value = g * 0.7;
+      localGain.connect(masterGain);
+
+      var startFreq = 500 + Math.random()*260;
+      var osc = ctx.createOscillator();
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(startFreq, t);
+      osc.frequency.exponentialRampToValueAtTime(startFreq * 2.1, t + 0.09);
+      osc.frequency.exponentialRampToValueAtTime(startFreq * 0.7, t + 0.18);
+      var filter = ctx.createBiquadFilter();
+      filter.type = 'bandpass';
+      filter.frequency.value = 1400;
+      filter.Q.value = 1.2;
+      var gain = ctx.createGain();
+      gain.gain.setValueAtTime(0.0001, t);
+      gain.gain.exponentialRampToValueAtTime(0.22, t + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.2);
+      osc.connect(filter);
+      filter.connect(gain);
+      gain.connect(localGain);
+      osc.start(t);
+      osc.stop(t + 0.22);
     }
 
     // ---- dynamite throw: quick whoosh, positional ----
@@ -1699,6 +2086,24 @@
       noiseGain.connect(localGain);
       noise.start(t);
       noise.stop(t + 0.9);
+
+      // crisp initial "crack" layer riding on top of the boom — makes the
+      // very first instant of the explosion read sharper/punchier instead
+      // of just a soft sub-bass swell
+      var crack = ctx.createBufferSource();
+      crack.buffer = getNoiseBuffer();
+      var crackFilter = ctx.createBiquadFilter();
+      crackFilter.type = 'bandpass';
+      crackFilter.frequency.value = 2600;
+      crackFilter.Q.value = 0.7;
+      var crackGain = ctx.createGain();
+      crackGain.gain.setValueAtTime(0.5, t);
+      crackGain.gain.exponentialRampToValueAtTime(0.001, t + 0.1);
+      crack.connect(crackFilter);
+      crackFilter.connect(crackGain);
+      crackGain.connect(localGain);
+      crack.start(t);
+      crack.stop(t + 0.12);
     }
 
     return {
@@ -1708,7 +2113,9 @@
       playKick: playKick,
       playThrow: playThrow,
       playFuseTick: playFuseTick,
-      playExplosion: playExplosion
+      playExplosion: playExplosion,
+      playCombo: playCombo,
+      playYelp: playYelp
     };
   })();
 
@@ -1759,6 +2166,7 @@
     setupLookControl();
     setupKickButton();
     setupDynamiteButton();
+    setupDesktopControls();
     setupChat();
     setupSettingsPanel();
 
@@ -1867,6 +2275,49 @@
     return hillGroundHeight(x, z);
   }
 
+  // Small tiling canvas texture that adds speckly grass-blade detail on top
+  // of the flat-shaded low-poly ground. Kept deliberately low-res and
+  // hand-drawn-looking (not a photo texture) so it reads as "juicier grass"
+  // rather than breaking the low-poly aesthetic — closer to a hand-painted
+  // dither pattern than realistic turf.
+  function makeGrassTexture(){
+    var size = 128;
+    var canvas = document.createElement('canvas');
+    canvas.width = size; canvas.height = size;
+    var ctx = canvas.getContext('2d');
+
+    // base fill — mid grass green, the vertex-color gradient tints this per-tile
+    ctx.fillStyle = '#6fc26a';
+    ctx.fillRect(0, 0, size, size);
+
+    // scattered darker speckles (denser clumps of blades)
+    for(var i=0;i<260;i++){
+      var x = Math.random()*size, y = Math.random()*size;
+      var shade = Math.random();
+      ctx.fillStyle = shade < 0.5 ? 'rgba(50,110,55,0.35)' : 'rgba(140,220,120,0.28)';
+      var w = 1 + Math.random()*2.5;
+      var h = 2 + Math.random()*4;
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(Math.random()*Math.PI);
+      ctx.fillRect(-w/2, -h/2, w, h);
+      ctx.restore();
+    }
+    // a few tiny bright highlight blades for sparkle
+    for(var j=0;j<40;j++){
+      ctx.fillStyle = 'rgba(210,255,180,0.4)';
+      ctx.fillRect(Math.random()*size, Math.random()*size, 1, 3);
+    }
+
+    var tex = new THREE.CanvasTexture(canvas);
+    tex.wrapS = THREE.RepeatWrapping;
+    tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.set(WORLD_SIZE/6, WORLD_SIZE/6);
+    tex.magFilter = THREE.NearestFilter; // keeps the speckles crisp/pixel-arty instead of blurry
+    tex.minFilter = THREE.LinearMipmapLinearFilter;
+    return tex;
+  }
+
   function setupGround(){
     var segs = 64;
     var geo = new THREE.PlaneGeometry(WORLD_SIZE, WORLD_SIZE, segs, segs);
@@ -1881,7 +2332,14 @@
     }
     geo.computeVertexNormals();
 
-    // low-poly flat shading via vertex colors (grass gradient by height)
+    // UVs so the grass texture actually tiles across the plane (PlaneGeometry
+    // already provides these by default, but we set them explicitly here
+    // since we've been mutating vertex heights above)
+    var uv = geo.attributes.uv;
+
+    // low-poly flat shading via vertex colors (grass gradient by height,
+    // plus a touch of per-vertex random tint so it doesn't look like one
+    // flat airbrushed gradient — same faceted trick used on the hill/character)
     var colors = [];
     var colorLow = new THREE.Color(0x4fae5a);
     var colorHigh = new THREE.Color(0x8fd66a);
@@ -1889,6 +2347,10 @@
       var h2 = pos.getY(j);
       var t = THREE.MathUtils.clamp((h2 + 3) / 6, 0, 1);
       var c = colorLow.clone().lerp(colorHigh, t);
+      var n = (Math.random() - 0.5) * 0.05;
+      c.r = THREE.MathUtils.clamp(c.r + n, 0, 1);
+      c.g = THREE.MathUtils.clamp(c.g + n, 0, 1);
+      c.b = THREE.MathUtils.clamp(c.b + n, 0, 1);
       colors.push(c.r, c.g, c.b);
     }
     geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
@@ -1897,7 +2359,8 @@
       vertexColors: true,
       flatShading: true,
       roughness: 0.95,
-      metalness: 0.0
+      metalness: 0.0,
+      map: makeGrassTexture()
     });
 
     groundMesh = new THREE.Mesh(geo, mat);
@@ -1911,6 +2374,34 @@
   // PATH — flat low-poly white strip from spawn to the field, with a
   // signposted fork leading into the locker room.
   // ---------------------------------------------------------------------
+  // Hand-drawn pebble/gravel speckle texture for the path strips — keeps
+  // the flat pale color but adds small darker flecks so it doesn't read as
+  // a single dead-flat plane.
+  var _pathTexture = null;
+  function getPathTexture(){
+    if(_pathTexture) return _pathTexture;
+    var size = 64;
+    var canvas = document.createElement('canvas');
+    canvas.width = size; canvas.height = size;
+    var ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#f5f5ff';
+    ctx.fillRect(0, 0, size, size);
+    for(var i=0;i<70;i++){
+      var x = Math.random()*size, y = Math.random()*size;
+      var r = 0.6 + Math.random()*1.6;
+      ctx.fillStyle = Math.random() < 0.6 ? 'rgba(200,198,225,0.5)' : 'rgba(230,228,250,0.6)';
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI*2);
+      ctx.fill();
+    }
+    var tex = new THREE.CanvasTexture(canvas);
+    tex.wrapS = THREE.RepeatWrapping;
+    tex.wrapT = THREE.RepeatWrapping;
+    tex.magFilter = THREE.NearestFilter;
+    _pathTexture = tex;
+    return tex;
+  }
+
   function addPathSegment(x0, z0, x1, z1, width){
     var dx = x1 - x0, dz = z1 - z0;
     var len = Math.sqrt(dx*dx + dz*dz);
@@ -1918,7 +2409,10 @@
 
     var geo = new THREE.PlaneGeometry(width, len, 1, 1);
     geo.rotateX(-Math.PI/2);
-    var mat = new THREE.MeshStandardMaterial({ color:0xf5f5ff, flatShading:true, roughness:0.9 });
+    var tex = getPathTexture().clone();
+    tex.needsUpdate = true;
+    tex.repeat.set(width/2, len/2);
+    var mat = new THREE.MeshStandardMaterial({ color:0xf5f5ff, flatShading:true, roughness:0.9, map: tex });
     var strip = new THREE.Mesh(geo, mat);
     strip.position.set((x0+x1)/2, PATH_Y, (z0+z1)/2);
     strip.rotation.y = angle;
@@ -2064,6 +2558,335 @@
       Math.PI/2,
       'ЦАРЬ ГОРЫ', 'Забирайся и стой на красном дольше всех'
     );
+  }
+
+  // ---------------------------------------------------------------------
+  // KING OF THE HILL — contest logic. The host (or the solo player, who is
+  // its own authority) tracks how long each player has stood inside the
+  // red circle; standing there accumulates time, stepping out freezes it
+  // (it does NOT reset — only a win resets everyone). Reaching HILL_WIN_TIME
+  // triggers a scripted finale: controls lock, cameras fly to the sky, a
+  // nuke drops on the hill, then everyone fades back to spawn.
+  // ---------------------------------------------------------------------
+  var HILL_WIN_TIME = 60;
+  var hillPanel = document.getElementById('hillPanel');
+  var hillTimerEl = document.getElementById('hillTimer');
+  var hillPlayerListEl = document.getElementById('hillPlayerList');
+  var screenFadeEl = document.getElementById('screenFade');
+  var hillBannerEl = document.getElementById('hillBanner');
+
+  var HillGame = {
+    times: {},        // pid -> accumulated seconds in the red circle
+    finaleRunning: false,
+    lastBroadcastTimes: null
+  };
+
+  // controls are locked during the win cutscene (camera taken over, nuke
+  // drop, teleport home) — checked by updatePlayerMovement/joystick users
+  var controlsLocked = false;
+
+  function myHillId(){
+    return Net.isMultiplayer() ? Net.state.myId : 'me';
+  }
+
+  function hillDisplayName(pid){
+    if(Net.isMultiplayer()){
+      if(pid === myHillId()) return (Net.state.players[pid] && Net.state.players[pid].name) || 'Ты';
+      var info = Net.state.players[pid];
+      return info ? info.name : ('Игрок ' + Net.shortId(pid));
+    }
+    return 'Ты';
+  }
+
+  // Host-authoritative (and solo) tick: advances the timer for whoever is
+  // standing in the red circle right now, checks for a winner, and keeps
+  // the shared `times` table in sync. Guests never call this — they just
+  // render whatever the host tells them via the snapshot.
+  function updateHillContestAuthoritative(dt){
+    if(HillGame.finaleRunning) return;
+
+    var myId = myHillId();
+    if(HillGame.times[myId] === undefined) HillGame.times[myId] = 0;
+    if(isInHillZone(playerState.pos.x, playerState.pos.z)){
+      HillGame.times[myId] += dt;
+    }
+
+    if(Net.isMultiplayer()){
+      for(var pid in remotePlayers){
+        var r = remotePlayers[pid];
+        if(HillGame.times[pid] === undefined) HillGame.times[pid] = 0;
+        if(isInHillZone(r.pos.x, r.pos.z)){
+          HillGame.times[pid] += dt;
+        }
+      }
+    }
+
+    // check for a winner (host/solo authoritative decision)
+    var winnerId = null;
+    for(var id in HillGame.times){
+      if(HillGame.times[id] >= HILL_WIN_TIME){
+        winnerId = id;
+        break;
+      }
+    }
+    if(winnerId !== null){
+      startHillFinale(winnerId);
+    }
+  }
+
+  // renders the side panel from whatever HillGame.times currently holds —
+  // called by everyone (host computes it, guests receive it via snapshot)
+  function renderHillPanel(){
+    var myId = myHillId();
+    var ids = Object.keys(HillGame.times);
+    if(ids.length === 0){
+      hillPanel.classList.remove('show');
+      return;
+    }
+    hillPanel.classList.add('show');
+
+    // sort by time descending so the leader is always on top
+    ids.sort(function(a,b){ return HillGame.times[b] - HillGame.times[a]; });
+
+    var myTime = HillGame.times[myId] || 0;
+    var amInZone = isInHillZone(playerState.pos.x, playerState.pos.z) && !HillGame.finaleRunning;
+    hillTimerEl.textContent = Math.max(0, HILL_WIN_TIME - myTime).toFixed(1);
+    hillTimerEl.classList.toggle('active', amInZone);
+
+    hillPlayerListEl.innerHTML = '';
+    var leaderId = ids[0];
+    for(var i=0;i<ids.length;i++){
+      var pid = ids[i];
+      var row = document.createElement('div');
+      row.className = 'hillPlayerRow' + (pid === leaderId && HillGame.times[pid] > 0 ? ' leading' : '');
+      var nameEl = document.createElement('div');
+      nameEl.className = 'hName';
+      nameEl.textContent = hillDisplayName(pid) + (pid === myId ? ' (ты)' : '');
+      var timeEl = document.createElement('div');
+      timeEl.className = 'hTime';
+      timeEl.textContent = HillGame.times[pid].toFixed(1) + 'с';
+      row.appendChild(nameEl);
+      row.appendChild(timeEl);
+      hillPlayerListEl.appendChild(row);
+    }
+  }
+
+  // ---- FINALE SEQUENCE ------------------------------------------------
+  // Host/solo decides a winner, then drives the whole cutscene: lock
+  // controls everywhere, snap every camera to the sky, drop a big nuke on
+  // the hill, explode, fade to black, teleport everyone to spawn, fade
+  // back in, unlock controls, reset the contest.
+  function startHillFinale(winnerId){
+    if(HillGame.finaleRunning) return;
+    HillGame.finaleRunning = true;
+
+    if(Net.isMultiplayer() && Net.isHost()){
+      Net.hostBroadcastEvent({ t:'event', payload:{ t:'hillWin', winnerId: winnerId } });
+    }
+    runHillFinaleLocally(winnerId);
+  }
+
+  // Runs on every machine (host/solo call it directly; guests call it from
+  // the relayed 'hillWin' event) so the cutscene plays identically for all.
+  function runHillFinaleLocally(winnerId){
+    controlsLocked = true;
+    resetJoy();
+    lookActive = false;
+
+    var myId = myHillId();
+    var winnerName = hillDisplayName(winnerId);
+    if(winnerId === myId){
+      hillBannerEl.textContent = 'ТЫ — ЦАРЬ ГОРЫ! 👑';
+    } else {
+      hillBannerEl.textContent = winnerName + ' — ЦАРЬ ГОРЫ!\nТЫ НЕ ЦАРЬ ГОРЫ 😔';
+    }
+    hillBannerEl.classList.add('show');
+
+    // remember where the camera was looking so we can restore it after
+    var savedYaw = playerState.yaw, savedPitch = playerState.pitch;
+
+    // 1) camera flies up to the sky, looking down at the hill — slow and
+    // deliberate so it actually reads as "rising into the sky" rather than
+    // a snap-cut, giving everyone time to see the banner and the view below
+    var flyUpDuration = 3.2;
+    var startPos = camera.position.clone();
+    var skyPos = new THREE.Vector3(HILL.arenaX, 70, HILL.arenaZ + 18);
+
+    function animateCameraTo(fromPos, toPos, lookAtPos, duration, onDone){
+      var start = performance.now();
+      function step(){
+        var t = Math.min(1, (performance.now() - start) / (duration*1000));
+        var e = t<0.5 ? 2*t*t : 1-Math.pow(-2*t+2,2)/2; // ease-in-out
+        camera.position.lerpVectors(fromPos, toPos, e);
+        camera.lookAt(lookAtPos);
+        camera.rotation.z = 0;
+        if(t < 1){
+          requestAnimationFrame(step);
+        } else if(onDone){
+          onDone();
+        }
+      }
+      step();
+    }
+
+    animateCameraTo(startPos, skyPos, new THREE.Vector3(HILL.arenaX, HILL.hillHeight, HILL.arenaZ), flyUpDuration, function(){
+      // brief pause hanging in the sky before the nuke drops, so the moment
+      // has room to breathe instead of the bomb falling the instant the
+      // camera arrives
+      setTimeout(function(){
+        // 2) a big nuke visual falls from directly overhead onto the hill
+        dropHillNuke(function(){
+          // 3) after the blast, hold on the aftermath for a moment, then
+          // fade to black, teleport everyone to spawn, and fade back in —
+          // each step given enough time to actually be noticed
+          setTimeout(function(){
+            screenFadeEl.classList.add('show');
+            setTimeout(function(){
+              teleportPlayerToSpawn();
+              camera.position.copy(skyPos);
+              camera.lookAt(new THREE.Vector3(HILL.arenaX, HILL.hillHeight, HILL.arenaZ));
+
+              setTimeout(function(){
+                screenFadeEl.classList.remove('show');
+
+                setTimeout(function(){
+                  hillBannerEl.classList.remove('show');
+                  playerState.yaw = savedYaw;
+                  playerState.pitch = savedPitch;
+                  controlsLocked = false;
+
+                  // reset everyone's contest time now that a round has been won
+                  for(var id in HillGame.times) HillGame.times[id] = 0;
+                  HillGame.finaleRunning = false;
+                }, 500);
+              }, 900);
+            }, 900);
+          }, 1200);
+        });
+      }, 900);
+    });
+  }
+
+  // Falling nuke: a stylized ordnance-shaped mesh (rounded body + X-braced
+  // tail fins, no markings) dropped from high above the hill straight down
+  // onto the summit, followed by a dedicated large-scale mushroom-cloud
+  // explosion plus real knockback for anyone still standing nearby (in
+  // case controls unlock exactly as it lands).
+  function dropHillNuke(onImpact){
+    var startY = 90;
+    var targetPos = new THREE.Vector3(HILL.arenaX, HILL.hillHeight, HILL.arenaZ);
+
+    var nuke = new THREE.Group();
+
+    var bodyMat = new THREE.MeshStandardMaterial({ color:0x54565c, flatShading:true, roughness:0.5, metalness:0.35 });
+    var darkMat = new THREE.MeshStandardMaterial({ color:0x2b2c30, flatShading:true, roughness:0.55, metalness:0.3 });
+    var accentMat = new THREE.MeshStandardMaterial({ color:0xe07b2a, flatShading:true, roughness:0.6 });
+
+    // main rounded body — an elongated low-poly sphere so it reads as a
+    // rounded ordnance casing rather than a plain cylinder
+    var body = new THREE.Mesh(new THREE.SphereGeometry(1.05, 10, 8), bodyMat);
+    body.scale.set(1, 1, 1.6);
+    body.castShadow = true;
+    nuke.add(body);
+
+    // darker nose cap on the leading (bottom) end
+    var nose = new THREE.Mesh(new THREE.SphereGeometry(1.0, 10, 8, 0, Math.PI*2, 0, Math.PI/2), darkMat);
+    nose.scale.set(1, 1, 1.6);
+    nose.position.z = 1.55;
+    nose.rotation.x = Math.PI/2;
+    nuke.add(nose);
+
+    // a couple of small raised panel details along the body, purely
+    // industrial/generic — no text, no insignia
+    var panel1 = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.12, 0.35), darkMat);
+    panel1.position.set(0, 1.0, -0.4);
+    nuke.add(panel1);
+    var panel2 = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.1, 0.3), darkMat);
+    panel2.position.set(0, 1.0, 0.6);
+    nuke.add(panel2);
+
+    // orange accent ring where body meets tail section
+    var ringMat = accentMat;
+    var ring = new THREE.Mesh(new THREE.TorusGeometry(1.0, 0.08, 6, 12), ringMat);
+    ring.position.z = -1.3;
+    nuke.add(ring);
+
+    // X-braced tail fin assembly at the back end, echoing the reference's
+    // crossed strut frame — four angled fins arranged in an X
+    var finGroup = new THREE.Group();
+    finGroup.position.z = -1.7;
+    var finMat = new THREE.MeshStandardMaterial({ color:0x3a3b40, flatShading:true, roughness:0.6, metalness:0.25 });
+    for(var fi=0; fi<4; fi++){
+      var fin = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.08, 0.55), finMat);
+      fin.position.z = 0.25;
+      var finPivot = new THREE.Group();
+      finPivot.rotation.z = (Math.PI/4) + fi*(Math.PI/2);
+      finPivot.add(fin);
+      finGroup.add(finPivot);
+
+      // orange tip accent on each fin
+      var finTip = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.1, 0.5), accentMat);
+      finTip.position.set(0.85, 0, 0.25);
+      finPivot.add(finTip);
+    }
+    nuke.add(finGroup);
+
+    // small ring connecting the fin tips, like the reference's outer frame
+    var tailRing = new THREE.Mesh(new THREE.TorusGeometry(0.95, 0.05, 6, 4), finMat);
+    tailRing.rotation.z = Math.PI/4;
+    tailRing.rotation.y = Math.PI/2;
+    tailRing.position.z = -1.55;
+    tailRing.scale.set(1.32, 1.32, 1);
+    nuke.add(tailRing);
+
+    nuke.rotation.x = Math.PI/2; // orient so nose points downward while falling
+    nuke.position.set(targetPos.x, startY, targetPos.z);
+    scene.add(nuke);
+
+    var fallDuration = 2.0;
+    var start = performance.now();
+    function step(){
+      var t = Math.min(1, (performance.now() - start) / (fallDuration*1000));
+      // ease-in (accelerating fall)
+      var e = t*t;
+      nuke.position.y = startY + (targetPos.y - startY) * e;
+      nuke.rotation.y += 0.15;
+      if(t < 1){
+        requestAnimationFrame(step);
+      } else {
+        scene.remove(nuke);
+        createNukeExplosionVisual(targetPos);
+        AudioEngine.playExplosion(targetPos);
+
+        // real knockback for the local player if still on/near the hill —
+        // only the host/solo applies this authoritatively for itself and,
+        // in multiplayer, sends personal impulses to whoever else is close
+        applyExplosionForce(playerState.pos, function(vel){
+          playerState.knockVel.add(vel);
+        }, targetPos);
+        if(Net.isMultiplayer() && Net.isHost()){
+          for(var pid in remotePlayers){
+            var r = remotePlayers[pid];
+            applyExplosionForce(r.pos, function(vel){
+              var conn = Net.state.conns[pid];
+              if(conn && conn.open){
+                conn.send({ t:'event', id: Net.state.myId, payload:{ t:'knockback', vx: vel.x, vy: vel.y, vz: vel.z } });
+              }
+            }, targetPos);
+          }
+        }
+
+        if(onImpact) onImpact();
+      }
+    }
+    step();
+  }
+
+  function teleportPlayerToSpawn(){
+    playerState.pos.set(0, 0, 6);
+    playerState.velocity.set(0,0,0);
+    playerState.knockVel.set(0,0,0);
+    updatePlayerTransform();
   }
 
   function setupPathAndLocker(){
@@ -2318,6 +3141,7 @@
 
   function applyPlayerColor(color){
     var parts = player.userData.parts;
+    playerState.color = color; // remember choice so it can be sent to other players over the network
     if(parts.torso.material.color.getHex() === color) return; // already this color, skip redundant material touch
     recolorCharacterParts(parts, color);
     // the locker room mannequin is a full-body copy of the player model —
@@ -2463,6 +3287,39 @@
   // ---------------------------------------------------------------------
   // LOW POLY CHARACTER FACTORY (used for player + dummies)
   // ---------------------------------------------------------------------
+  // Subtle vertical sheen texture for the droplet body: lighter near the
+  // top-front (like a glossy highlight catching the light), darker at the
+  // base. It's grayscale so it multiplies cleanly with whatever color is
+  // set via material.color (recoloring on podiums / avatar colors keeps
+  // working exactly as before), it just gives the flat low-poly body a bit
+  // of hand-painted gradient/sheen instead of one dead-flat tone.
+  var _bodySheenTexture = null;
+  function getBodySheenTexture(){
+    if(_bodySheenTexture) return _bodySheenTexture;
+    var w = 32, h = 64;
+    var canvas = document.createElement('canvas');
+    canvas.width = w; canvas.height = h;
+    var ctx = canvas.getContext('2d');
+    var grad = ctx.createLinearGradient(0, 0, 0, h);
+    grad.addColorStop(0, '#ffffff');
+    grad.addColorStop(0.28, '#e8e8e8');
+    grad.addColorStop(0.55, '#c9c9c9');
+    grad.addColorStop(1, '#9a9a9a');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, w, h);
+    // soft highlight streak on one side, like light wrapping the droplet
+    var hl = ctx.createLinearGradient(0, 0, w, 0);
+    hl.addColorStop(0, 'rgba(255,255,255,0.55)');
+    hl.addColorStop(0.35, 'rgba(255,255,255,0.15)');
+    hl.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = hl;
+    ctx.fillRect(0, 0, w, h);
+    var tex = new THREE.CanvasTexture(canvas);
+    tex.magFilter = THREE.LinearFilter;
+    _bodySheenTexture = tex;
+    return tex;
+  }
+
   function buildCharacter(bodyColor, headColor){
     var group = new THREE.Group();
 
@@ -2473,8 +3330,9 @@
     // but we still expose head/eyeL/eyeR/armL/armR/legL/legR in userData
     // so the rest of the game (recoloring, walk-cycle swing, first-person
     // head-hide) keeps working unchanged.
-    var bodyMat = new THREE.MeshStandardMaterial({ color: bodyColor, flatShading:true, roughness:0.55 });
-    var limbMat = new THREE.MeshStandardMaterial({ color: bodyColor, flatShading:true, roughness:0.55 });
+    var sheenTex = getBodySheenTexture();
+    var bodyMat = new THREE.MeshStandardMaterial({ color: bodyColor, flatShading:true, roughness:0.55, map: sheenTex });
+    var limbMat = new THREE.MeshStandardMaterial({ color: bodyColor, flatShading:true, roughness:0.55, map: sheenTex });
     var whiteMat = new THREE.MeshStandardMaterial({ color:0xffffff, flatShading:true, roughness:0.4 });
     var pupilMat = new THREE.MeshStandardMaterial({ color:0x1a1b2e, flatShading:true, roughness:0.3 });
 
@@ -2621,7 +3479,8 @@
     knockVel: new THREE.Vector3(0,0,0),
     grounded: true,
     animT: 0,
-    lastWalkPhase: 0
+    lastWalkPhase: 0,
+    color: 0xff5d5d // current body color; updated when standing on a podium, and synced to other players
   };
 
   function setupPlayer(){
@@ -2673,6 +3532,8 @@
   }
 
   function makeRemoteAvatar(pid){
+    // fallback color until the first network packet with the player's real
+    // color arrives; applyRemoteAvatarState() will recolor it immediately after
     var color = colorForPlayerId(pid);
     var mesh = buildCharacter(color, 0xffe08a);
     scene.add(mesh);
@@ -2700,7 +3561,8 @@
       targetYaw: 0,
       animT: 0,
       lastWalkPhase: 0,
-      walking: false
+      walking: false,
+      color: color
     };
   }
 
@@ -2741,6 +3603,13 @@
     r.targetPos.set(s.x, gy, s.z);
     r.targetYaw = s.yaw;
     r.walking = !!s.walking;
+    // recolor the remote avatar whenever the sender's podium color changes,
+    // so picking a new color on the podium is actually visible to others
+    // instead of everyone staying locked into their spawn-hash color forever
+    if(typeof s.color === 'number' && s.color !== r.color){
+      r.color = s.color;
+      recolorCharacterParts(r.mesh.userData.parts, s.color);
+    }
   }
 
   var CHAT_BUBBLE_DURATION = 5; // seconds a chat bubble stays visible
@@ -2878,7 +3747,11 @@
   // guests just play back whatever the host already decided.
   function handleIncomingGameplayEvent(originId, payload, isHost){
     if(!payload) return;
-    if(payload.t === 'kick'){
+    if(payload.t === 'hillWin'){
+      // host has decided the contest is over — every guest plays the exact
+      // same scripted finale locally (camera to sky, nuke, teleport home)
+      if(!isHost) runHillFinaleLocally(payload.winnerId);
+    } else if(payload.t === 'kick'){
       AudioEngine.playKick(new THREE.Vector3(payload.x, 0, payload.z));
       if(isHost && dummies[payload.dummyIdx]){
         applyKickToDummy(dummies[payload.dummyIdx], payload.dx, payload.dz);
@@ -2981,9 +3854,9 @@
     var myMag = Math.sqrt(joyVector.x*joyVector.x + joyVector.y*joyVector.y);
     var hostState = {
       x: playerState.pos.x, z: playerState.pos.z,
-      yaw: playerState.yaw, walking: myMag > 0.15
+      yaw: playerState.yaw, walking: myMag > 0.15, color: playerState.color
     };
-    return { dummies: dummySnap, dynamites: dynSnap, host: hostState };
+    return { dummies: dummySnap, dynamites: dynSnap, host: hostState, hill: HillGame.times };
   }
 
   function applyHostSnapshot(snap){
@@ -3000,6 +3873,13 @@
     // since it never sends itself an 'input' packet like other guests do
     if(snap.host){
       applyRemoteAvatarState('host', snap.host);
+    }
+    // King of the Hill: guests don't run the contest themselves, they just
+    // mirror whatever times table the host is authoritatively tracking —
+    // this keeps the side panel identical for everyone without guests
+    // needing to know every other guest's position themselves.
+    if(snap.hill && !HillGame.finaleRunning){
+      HillGame.times = snap.hill;
     }
     // guests don't need to track in-flight dynamite meshes precisely frame
     // by frame (thrown visuals already played locally via events) — the
@@ -3199,11 +4079,103 @@
   }
 
   function applyLookDelta(dx, dy){
+    if(controlsLocked) return; // finale cutscene owns the camera
     var sens = getLookSensitivity();
     playerState.yaw -= dx * sens;
     playerState.pitch -= dy * sens;
     playerState.pitch = THREE.MathUtils.clamp(playerState.pitch, -PITCH_LIMIT, PITCH_LIMIT);
     playerState.facing = playerState.yaw;
+  }
+
+  // ---------------------------------------------------------------------
+  // DESKTOP (PC) CONTROLS — WASD/arrow-key movement, real mouse-look via
+  // Pointer Lock, and keyboard shortcuts for kick/dynamite. Layered on top
+  // of the existing touch/mouse-drag controls without replacing them, so
+  // the same build works well on both phone and PC. Only kicks in on
+  // devices that look like a mouse+keyboard setup (no touch support);
+  // touchscreens keep the on-screen joystick/look-drag exactly as before.
+  // ---------------------------------------------------------------------
+  var isPcMode = !('ontouchstart' in window) && navigator.maxTouchPoints === 0;
+  var keysDown = {}; // tracks currently-held movement keys
+
+  function setupDesktopControls(){
+    if(!isPcMode) return;
+    document.body.classList.add('pc-mode');
+
+    var canvas = renderer.domElement;
+
+    // click anywhere on the game view to grab the mouse cursor (pointer
+    // lock) for FPS-style looking around; browsers require a user gesture
+    // to grant this, hence the click-to-play hint shown until it's active
+    canvas.addEventListener('click', function(){
+      if(controlsLocked) return;
+      if(document.pointerLockElement !== canvas){
+        canvas.requestPointerLock();
+      }
+    });
+
+    document.addEventListener('pointerlockchange', function(){
+      var locked = document.pointerLockElement === canvas;
+      document.body.classList.toggle('pointer-locked', locked);
+    });
+
+    document.addEventListener('mousemove', function(e){
+      if(document.pointerLockElement !== canvas) return;
+      applyLookDelta(e.movementX || 0, e.movementY || 0);
+    });
+
+    // WASD + arrow keys drive the same joyVector the on-screen joystick
+    // writes to, so all downstream movement code (acceleration, collision,
+    // animation) just works without any changes
+    window.addEventListener('keydown', function(e){
+      if(isTypingIntoField(e)) return;
+      keysDown[e.code] = true;
+      updateKeyboardMoveVector();
+
+      if(e.code === 'Space'){
+        e.preventDefault();
+        doKick();
+      } else if(e.code === 'KeyF' || e.code === 'KeyE'){
+        e.preventDefault();
+        throwDynamite();
+      }
+    });
+
+    window.addEventListener('keyup', function(e){
+      keysDown[e.code] = false;
+      updateKeyboardMoveVector();
+    });
+
+    // if the window loses focus (alt-tab etc.) release all movement keys
+    // so the player doesn't get stuck walking in one direction
+    window.addEventListener('blur', function(){
+      keysDown = {};
+      updateKeyboardMoveVector();
+    });
+  }
+
+  // true while the user is focused on a text input, so WASD/space typed
+  // into the nickname or room-code fields (or chat) isn't hijacked as
+  // movement/kick/dynamite input
+  function isTypingIntoField(e){
+    var tag = document.activeElement && document.activeElement.tagName;
+    return tag === 'INPUT' || tag === 'TEXTAREA';
+  }
+
+  function updateKeyboardMoveVector(){
+    var x = 0, z = 0;
+    if(keysDown['KeyA'] || keysDown['ArrowLeft']) x -= 1;
+    if(keysDown['KeyD'] || keysDown['ArrowRight']) x += 1;
+    if(keysDown['KeyW'] || keysDown['ArrowUp']) z -= 1;
+    if(keysDown['KeyS'] || keysDown['ArrowDown']) z += 1;
+
+    if(x !== 0 && z !== 0){
+      // normalize diagonal movement so it isn't faster than straight
+      var len = Math.sqrt(x*x + z*z);
+      x /= len; z /= len;
+    }
+    joyVector.x = x;
+    joyVector.y = z;
   }
 
   // ---------------------------------------------------------------------
@@ -3281,11 +4253,113 @@
     d.airborne = true;
   }
 
+  // ---------------------------------------------------------------------
+  // KICK JUICE — hit-text popups, a combo counter, and a tiny screen shake.
+  // Purely cosmetic feedback layered on top of the existing kick mechanic;
+  // none of it touches game state other than the on-screen combo number.
+  // ---------------------------------------------------------------------
+  var hitTextLayer = document.getElementById('hitTextLayer');
+  var comboBadge = document.getElementById('comboBadge');
+  var appEl = document.getElementById('app');
+  var kickCounterEl = document.getElementById('kickCounter');
+  var kickCounterVal = document.getElementById('kickCounterVal');
+  var totalKicks = 0;
+
+  var HIT_PHRASES = [
+    'ПАЦАН!', 'ЛЕТИТ!', 'ГОООЛ!', 'УХ ТЫ!', 'В КОСМОС!',
+    'НОКАУТ!', 'КРАСОТА!', 'БАБАХ!', 'В ПОЛЁТ!', 'ЕСТЬ КОНТАКТ!'
+  ];
+  var COMBO_PHRASES = {
+    3: 'ТРИПЛ!',
+    5: 'ПЯТЬ ПОДРЯД!',
+    8: 'НЕОСТАНОВИМ!',
+    12: 'ЛЕГЕНДА ПИНКА!'
+  };
+  // total-kick milestones — a little "прикол" surprise every so often to
+  // reward just playing around, independent of the combo streak
+  var MILESTONE_PHRASES = {
+    10: 'ДЕСЯТКА! 🎉',
+    25: '25 ПИНКОВ! ПОРА В ЗАЛ',
+    50: 'ПОЛУСОТНЯ! НОГА КАК ЧУГУН',
+    100: 'СОТКА! ТЫ МАШИНА ДЛЯ ПИНКОВ'
+  };
+
+  var comboCount = 0;
+  var comboResetTimer = null;
+  var COMBO_WINDOW_MS = 2200; // how long between kicks before the streak resets
+
+  function spawnHitText(text, big){
+    var el = document.createElement('div');
+    el.className = 'hitText';
+    el.textContent = text;
+    // slight random rotation + horizontal jitter so repeated popups don't
+    // stack in an identical, robotic spot
+    var rot = (Math.random()*10 - 5).toFixed(1) + 'deg';
+    el.style.setProperty('--rot', rot);
+    el.style.left = (48 + Math.random()*4) + '%';
+    if(big) el.style.color = 'var(--coral)';
+    hitTextLayer.appendChild(el);
+    setTimeout(function(){
+      if(el.parentNode) el.parentNode.removeChild(el);
+    }, 750);
+  }
+
+  function triggerShake(big){
+    appEl.classList.remove('shake', 'shakeBig');
+    // force reflow so re-adding the class restarts the animation even if
+    // it's already mid-shake from a rapid follow-up kick
+    void appEl.offsetWidth;
+    appEl.classList.add(big ? 'shakeBig' : 'shake');
+  }
+
+  function registerHit(){
+    totalKicks++;
+    kickCounterVal.textContent = totalKicks;
+    kickCounterEl.classList.remove('pulse');
+    void kickCounterEl.offsetWidth;
+    kickCounterEl.classList.add('pulse');
+
+    comboCount++;
+    if(comboResetTimer) clearTimeout(comboResetTimer);
+    comboResetTimer = setTimeout(function(){
+      comboCount = 0;
+      comboBadge.classList.remove('show');
+    }, COMBO_WINDOW_MS);
+
+    var phrase = HIT_PHRASES[Math.floor(Math.random() * HIT_PHRASES.length)];
+    spawnHitText(phrase, false);
+    triggerShake(false);
+
+    if(comboCount >= 2){
+      comboBadge.textContent = 'КОМБО x' + comboCount;
+      comboBadge.classList.remove('show');
+      void comboBadge.offsetWidth;
+      comboBadge.classList.add('show');
+      AudioEngine.playCombo(comboCount);
+
+      if(COMBO_PHRASES[comboCount]){
+        setTimeout(function(){
+          spawnHitText(COMBO_PHRASES[comboCount], true);
+          triggerShake(true);
+        }, 90);
+      }
+    }
+
+    if(MILESTONE_PHRASES[totalKicks]){
+      setTimeout(function(){
+        spawnHitText(MILESTONE_PHRASES[totalKicks], true);
+        triggerShake(true);
+        AudioEngine.playCombo(10);
+      }, 160);
+    }
+  }
+
   var PLAYER_KICK_FORCE = 13;
   var PLAYER_KICK_UP = 7;
   var KNOCK_GRAVITY = -18; // matches updateDummyPhysics's GRAVITY so a kicked player and a kicked dummy arc the same way
 
   function doKick(){
+    if(controlsLocked) return;
     if(kickCooldown > 0) return;
     if(!nearestDummy && !nearestPlayerId) return;
 
@@ -3303,6 +4377,8 @@
       // own connection. We just report the kick + play our local sound;
       // the target feels it once the host's knockback event arrives.
       AudioEngine.playKick(targetPos);
+      AudioEngine.playYelp(targetPos);
+      registerHit();
       if(Net.isHost()){
         applyKickToRemotePlayer(nearestPlayerId, dx, dz);
         // let every other connected guest hear/see this kick too (mirrors
@@ -3321,9 +4397,13 @@
         var idx = dummies.indexOf(d);
         Net.guestSendEvent({ t:'kick', dummyIdx: idx, x: d.pos.x, z: d.pos.z, dx: dx, dz: dz });
         AudioEngine.playKick(d.pos);
+        AudioEngine.playYelp(d.pos);
+        registerHit();
       } else {
         applyKickToDummy(d, dx, dz);
         AudioEngine.playKick(d.pos);
+        AudioEngine.playYelp(d.pos);
+        registerHit();
         if(Net.isMultiplayer() && Net.isHost()){
           var hostIdx = dummies.indexOf(d);
           Net.hostBroadcastEvent({ t:'event', payload:{ t:'kick', dummyIdx: hostIdx, x: d.pos.x, z: d.pos.z, dx: dx, dz: dz } });
@@ -3356,12 +4436,21 @@
     }
   }
 
+  var dummyIdleT = 0;
   function updateDummyPhysics(dt){
     var GRAVITY = -18;
+    dummyIdleT += dt;
     for(var i=0;i<dummies.length;i++){
       var d = dummies[i];
       if(!d.airborne){
-        // gentle idle bob handled in animate() via mesh rotation only
+        // gentle idle bob + sway so waiting dummies feel alive rather than
+        // frozen statues — small per-dummy phase offset (based on index) so
+        // they don't all bounce perfectly in sync
+        var phase = dummyIdleT * 1.6 + i * 1.7;
+        var bob = Math.sin(phase) * 0.04;
+        d.mesh.position.set(d.pos.x, d.pos.y + bob, d.pos.z);
+        d.mesh.rotation.y = Math.sin(phase * 0.5) * 0.08;
+        d.mesh.rotation.z = Math.sin(phase * 0.37 + 1) * 0.03;
         continue;
       }
 
@@ -3488,17 +4577,106 @@
     });
   }
 
+  // Canvas-drawn "TNT" label texture for the dynamite's yellow band — small
+  // hand-lettered look rather than a plain flat-yellow cylinder.
+  var _dynamiteLabelTexture = null;
+  function getDynamiteLabelTexture(){
+    if(_dynamiteLabelTexture) return _dynamiteLabelTexture;
+    var w = 128, h = 48;
+    var canvas = document.createElement('canvas');
+    canvas.width = w; canvas.height = h;
+    var ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#f5c518';
+    ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = '#2b2420';
+    ctx.font = 'bold 26px Arial, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    // repeat the label twice so it reads correctly no matter which side faces camera
+    ctx.fillText('TNT', w*0.25, h/2);
+    ctx.fillText('TNT', w*0.75, h/2);
+    // thin dark border stripes top/bottom
+    ctx.fillRect(0, 0, w, 3);
+    ctx.fillRect(0, h-3, w, 3);
+    var tex = new THREE.CanvasTexture(canvas);
+    tex.wrapS = THREE.RepeatWrapping;
+    tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.set(2, 1);
+    _dynamiteLabelTexture = tex;
+    return tex;
+  }
+
   function spawnDynamiteVisual(startX, startZ, targetX, targetZ, visualOnly){
-    // stick shape: cylinder body + small fuse
+    // bundle of 3 red sticks matching the reference art: octagonal (low-poly)
+    // sticks, a bold yellow "DYNAMITE" label band around the middle, two rope
+    // wraps (upper + lower) binding the bundle, dark end-caps, and bent wire
+    // fuses fanning outward with glowing orange tips
     var group = new THREE.Group();
-    var bodyMat = new THREE.MeshStandardMaterial({ color:0xcc2222, flatShading:true, roughness:0.6 });
-    var body = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.14, 0.5, 10), bodyMat);
-    body.castShadow = true;
-    group.add(body);
-    var capMat = new THREE.MeshStandardMaterial({ color:0x333333, flatShading:true });
-    var capTop = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.12, 8), capMat);
-    capTop.position.y = 0.31;
-    group.add(capTop);
+
+    var STICK_RADIUS = 0.115;
+    var STICK_HEIGHT = 0.52;
+    var stickOffsets = [-0.145, 0, 0.145]; // side-by-side along local X
+
+    var bodyMat = new THREE.MeshStandardMaterial({ color:0xc32d2d, flatShading:true, roughness:0.55 });
+    var labelMat = new THREE.MeshStandardMaterial({ color:0xf5c518, flatShading:true, roughness:0.65, map: getDynamiteLabelTexture() });
+    var capMat = new THREE.MeshStandardMaterial({ color:0x2b2420, flatShading:true, roughness:0.8 });
+    var ropeMat = new THREE.MeshStandardMaterial({ color:0xa89a7c, flatShading:true, roughness:0.9 });
+    var wireMat = new THREE.MeshStandardMaterial({ color:0x8a8478, flatShading:true, roughness:0.7 });
+    var tipMat = new THREE.MeshBasicMaterial({ color:0xff8a2a });
+
+    for(var i=0;i<stickOffsets.length;i++){
+      var stick = new THREE.Group();
+      stick.position.x = stickOffsets[i];
+
+      // octagonal (8-sided) low-poly stick body, matching the faceted look
+      // of the reference render
+      var body = new THREE.Mesh(new THREE.CylinderGeometry(STICK_RADIUS, STICK_RADIUS, STICK_HEIGHT, 8), bodyMat);
+      body.castShadow = true;
+      stick.add(body);
+
+      // dark end-cap at the base, like the reference's black bottoms
+      var cap = new THREE.Mesh(new THREE.CylinderGeometry(STICK_RADIUS*0.98, STICK_RADIUS*0.98, 0.04, 8), capMat);
+      cap.position.y = -STICK_HEIGHT/2 + 0.015;
+      stick.add(cap);
+
+      // bold yellow label band around the middle of the stick (the
+      // "DYNAMITE / EXPLOSIVE" band in the reference)
+      var label = new THREE.Mesh(new THREE.CylinderGeometry(STICK_RADIUS + 0.006, STICK_RADIUS + 0.006, STICK_HEIGHT*0.42, 8), labelMat);
+      stick.add(label);
+
+      // bent wire fuse poking out the top, angled slightly outward so the
+      // three fuses fan out like the reference bundle, with a small glowing
+      // orange tip
+      var fuseGroup = new THREE.Group();
+      fuseGroup.position.y = STICK_HEIGHT/2;
+      var fuseAngle = (i - 1) * 0.32; // fan outward: left stick tilts left, right tilts right
+      fuseGroup.rotation.z = fuseAngle;
+      var wire = new THREE.Mesh(new THREE.CylinderGeometry(0.017, 0.017, 0.24, 5), wireMat);
+      wire.position.y = 0.12;
+      wire.rotation.z = 0.32;
+      fuseGroup.add(wire);
+      var tip = new THREE.Mesh(new THREE.SphereGeometry(0.032, 6, 6), tipMat);
+      tip.position.set(0.065, 0.24, 0);
+      fuseGroup.add(tip);
+      stick.add(fuseGroup);
+
+      group.add(stick);
+    }
+
+    // two rope wraps binding the bundle together — upper and lower, like the
+    // reference's double-band wrap — each a torus squashed to hug the three
+    // cylinders instead of a perfect circle
+    var ropeWrapTop = new THREE.Mesh(new THREE.TorusGeometry(0.165, 0.024, 5, 12), ropeMat);
+    ropeWrapTop.scale.set(1, 0.72, 1);
+    ropeWrapTop.rotation.x = Math.PI/2;
+    ropeWrapTop.position.y = 0.14;
+    group.add(ropeWrapTop);
+
+    var ropeWrapBottom = new THREE.Mesh(new THREE.TorusGeometry(0.165, 0.024, 5, 12), ropeMat);
+    ropeWrapBottom.scale.set(1, 0.72, 1);
+    ropeWrapBottom.rotation.x = Math.PI/2;
+    ropeWrapBottom.position.y = -0.16;
+    group.add(ropeWrapBottom);
 
     var startY = getGroundY(startX, startZ) + 1.4;
     var targetY = getGroundY(targetX, targetZ);
@@ -3529,6 +4707,7 @@
   }
 
   function throwDynamite(){
+    if(controlsLocked) return;
     if(dynamiteCooldown > 0) return;
     dynamiteCooldown = DYNAMITE_COOLDOWN_TIME;
 
@@ -3634,6 +4813,18 @@
     createExplosionVisual(center);
     AudioEngine.playExplosion(center);
 
+    // big screen shake if the blast is close to the local player — distant
+    // explosions still boom on the audio side (via distanceGain) but
+    // shouldn't rattle a screen the player is nowhere near
+    var shakeDist = Math.sqrt(
+      Math.pow(center.x - playerState.pos.x, 2) +
+      Math.pow(center.z - playerState.pos.z, 2)
+    );
+    if(shakeDist < 18){
+      triggerShake(true);
+      spawnHitText('БАБАХ!', true);
+    }
+
     // knockback on dummies (host/solo authoritative physics)
     for(var i=0;i<dummies.length;i++){
       applyExplosionForce(dummies[i].pos, function(vel, spin){
@@ -3726,6 +4917,203 @@
     });
   }
 
+  // ---------------------------------------------------------------------
+  // Epic nuke explosion: a big white-hot flash, an expanding ground
+  // shockwave ring, a fast debris burst, and a proper rising mushroom
+  // cloud (stem + billowing cap built from layered low-poly spheres) that
+  // grows, drifts upward, and slowly fades — all pure three.js primitives.
+  // ---------------------------------------------------------------------
+  var nukeEffects = [];
+
+  function createNukeExplosionVisual(center){
+    var groundY = getGroundY(center.x, center.z);
+    var base = new THREE.Vector3(center.x, groundY, center.z);
+
+    // 1) blinding white-orange flash, much bigger and brighter than the
+    // regular dynamite flash so the moment reads as far more powerful
+    var flash = new THREE.Mesh(
+      new THREE.SphereGeometry(1, 14, 14),
+      new THREE.MeshBasicMaterial({ color:0xfff3c4, transparent:true, opacity:1 })
+    );
+    flash.position.set(base.x, base.y + 2, base.z);
+    scene.add(flash);
+
+    var flash2 = new THREE.Mesh(
+      new THREE.SphereGeometry(1, 14, 14),
+      new THREE.MeshBasicMaterial({ color:0xffb24a, transparent:true, opacity:0.85 })
+    );
+    flash2.position.copy(flash.position);
+    scene.add(flash2);
+
+    // 2) expanding shockwave ring hugging the ground
+    var shockwave = new THREE.Mesh(
+      new THREE.TorusGeometry(1, 0.4, 8, 24),
+      new THREE.MeshBasicMaterial({ color:0xffd98a, transparent:true, opacity:0.8 })
+    );
+    shockwave.rotation.x = Math.PI/2;
+    shockwave.position.set(base.x, base.y + 0.3, base.z);
+    scene.add(shockwave);
+
+    // 3) fast debris/ember burst
+    var particles = [];
+    var particleCount = 36;
+    var particleGeo = new THREE.TetrahedronGeometry(0.35, 0);
+    for(var i=0;i<particleCount;i++){
+      var pMat = new THREE.MeshStandardMaterial({
+        color: Math.random() > 0.5 ? 0xff6a2e : 0xffd35c,
+        emissive: 0x552200,
+        flatShading:true
+      });
+      var p = new THREE.Mesh(particleGeo, pMat);
+      p.position.set(base.x, base.y + 1, base.z);
+      var ang = Math.random() * Math.PI * 2;
+      var speed = 8 + Math.random()*12;
+      var upSpeed = 8 + Math.random()*10;
+      p.userData.vel = new THREE.Vector3(Math.cos(ang)*speed, upSpeed, Math.sin(ang)*speed);
+      scene.add(p);
+      particles.push(p);
+    }
+
+    // 4) the mushroom cloud itself — a rising stem (stacked stretched
+    // spheres) topped with a billowing cap (a cluster of overlapping
+    // spheres), all starting small and expanding upward over a few seconds
+    var cloudGroup = new THREE.Group();
+    cloudGroup.position.set(base.x, base.y, base.z);
+    scene.add(cloudGroup);
+
+    var smokeMatDark = new THREE.MeshStandardMaterial({ color:0x4a4640, flatShading:true, roughness:1 });
+    var smokeMatMid = new THREE.MeshStandardMaterial({ color:0x736c62, flatShading:true, roughness:1 });
+    var smokeMatLight = new THREE.MeshStandardMaterial({ color:0xa89f92, flatShading:true, roughness:1 });
+    var smokeMatGlow = new THREE.MeshStandardMaterial({ color:0xffab5c, flatShading:true, roughness:1, emissive:0x552a10 });
+
+    // stem: a few stacked, slightly tapering spheres
+    var stem = new THREE.Group();
+    var stemSegs = [
+      { y:0.6, r:1.0, mat:smokeMatGlow },
+      { y:1.6, r:1.15, mat:smokeMatDark },
+      { y:2.7, r:1.3, mat:smokeMatMid },
+      { y:3.9, r:1.5, mat:smokeMatMid }
+    ];
+    for(var s=0;s<stemSegs.length;s++){
+      var seg = stemSegs[s];
+      var m = new THREE.Mesh(new THREE.SphereGeometry(seg.r, 8, 6), seg.mat);
+      m.position.y = seg.y;
+      m.scale.set(1, 1.3, 1);
+      stem.add(m);
+    }
+    cloudGroup.add(stem);
+
+    // cap: cluster of big overlapping spheres for that classic billowing
+    // mushroom-head silhouette
+    var cap = new THREE.Group();
+    cap.position.y = 5.2;
+    var capPuffs = [
+      { x:0, y:0, z:0, r:2.6, mat:smokeMatMid },
+      { x:1.6, y:0.3, z:0.4, r:1.9, mat:smokeMatLight },
+      { x:-1.7, y:0.2, z:-0.3, r:1.8, mat:smokeMatDark },
+      { x:0.5, y:1.0, z:-1.4, r:1.7, mat:smokeMatLight },
+      { x:-0.6, y:0.9, z:1.3, r:1.7, mat:smokeMatMid },
+      { x:0, y:1.6, z:0, r:1.6, mat:smokeMatLight }
+    ];
+    for(var c=0;c<capPuffs.length;c++){
+      var cp = capPuffs[c];
+      var pm = new THREE.Mesh(new THREE.SphereGeometry(cp.r, 8, 6), cp.mat);
+      pm.position.set(cp.x, cp.y, cp.z);
+      cap.add(pm);
+    }
+    cloudGroup.add(cap);
+
+    // start the whole cloud tiny — it grows into place over the effect's life
+    cloudGroup.scale.set(0.05, 0.05, 0.05);
+
+    nukeEffects.push({
+      flash: flash,
+      flash2: flash2,
+      shockwave: shockwave,
+      particles: particles,
+      cloudGroup: cloudGroup,
+      baseY: base.y,
+      age: 0,
+      maxAge: 4.5
+    });
+  }
+
+  function updateNukeEffects(dt){
+    var GRAVITY = -18;
+    for(var i = nukeEffects.length - 1; i >= 0; i--){
+      var fx = nukeEffects[i];
+      fx.age += dt;
+      var t = fx.age / fx.maxAge;
+
+      // flash: quick, blinding, gone within the first fraction of a second
+      var flashT = Math.min(1, fx.age / 0.5);
+      if(fx.flash){
+        var fs = 1 + flashT * 16;
+        fx.flash.scale.set(fs, fs, fs);
+        fx.flash.material.opacity = Math.max(0, 1 - flashT*1.6);
+        if(flashT >= 1){ scene.remove(fx.flash); fx.flash = null; }
+      }
+      if(fx.flash2){
+        var f2t = Math.min(1, fx.age / 0.8);
+        var f2s = 1 + f2t * 22;
+        fx.flash2.scale.set(f2s, f2s, f2s);
+        fx.flash2.material.opacity = Math.max(0, 0.85 - f2t);
+        if(f2t >= 1){ scene.remove(fx.flash2); fx.flash2 = null; }
+      }
+
+      // shockwave: expands fast along the ground, fading out
+      if(fx.shockwave){
+        var swT = Math.min(1, fx.age / 1.6);
+        var sws = 1 + swT * 30;
+        fx.shockwave.scale.set(sws, sws, 1);
+        fx.shockwave.material.opacity = Math.max(0, 0.8 * (1 - swT));
+        if(swT >= 1){ scene.remove(fx.shockwave); fx.shockwave = null; }
+      }
+
+      // debris particles: ballistic arc with gravity, fading out
+      for(var j=0;j<fx.particles.length;j++){
+        var p = fx.particles[j];
+        p.userData.vel.y += GRAVITY * dt;
+        p.position.x += p.userData.vel.x * dt;
+        p.position.y += p.userData.vel.y * dt;
+        p.position.z += p.userData.vel.z * dt;
+        p.rotation.x += dt * 10;
+        p.rotation.y += dt * 8;
+        p.material.transparent = true;
+        p.material.opacity = Math.max(0, 1 - t*1.5);
+      }
+
+      // mushroom cloud: grows quickly, rises steadily, then holds and
+      // fades away near the end of the effect's life
+      if(fx.cloudGroup){
+        var growT = Math.min(1, fx.age / 2.2); // ease-out growth
+        var scale = 0.05 + (1 - Math.pow(1-growT, 3)) * 0.95;
+        fx.cloudGroup.scale.set(scale, scale, scale);
+        fx.cloudGroup.position.y = fx.baseY + Math.min(fx.age, 2.2) * 2.0;
+
+        if(t > 0.55){
+          var fadeT = (t - 0.55) / 0.45;
+          var op = Math.max(0, 1 - fadeT);
+          fx.cloudGroup.traverse(function(obj){
+            if(obj.isMesh){
+              obj.material.transparent = true;
+              obj.material.opacity = op;
+            }
+          });
+        }
+      }
+
+      if(t >= 1){
+        for(var k=0;k<fx.particles.length;k++) scene.remove(fx.particles[k]);
+        if(fx.cloudGroup) scene.remove(fx.cloudGroup);
+        if(fx.shockwave) scene.remove(fx.shockwave);
+        if(fx.flash) scene.remove(fx.flash);
+        if(fx.flash2) scene.remove(fx.flash2);
+        nukeEffects.splice(i, 1);
+      }
+    }
+  }
+
   function updateExplosionEffects(dt){
     var GRAVITY = -18;
     for(var i = explosionEffects.length - 1; i >= 0; i--){
@@ -3768,8 +5156,8 @@
   // MAIN UPDATE LOOP
   // ---------------------------------------------------------------------
   function updatePlayerMovement(dt){
-    var moveX = joyVector.x;
-    var moveZ = joyVector.y; // stick forward (up) is negative y
+    var moveX = controlsLocked ? 0 : joyVector.x;
+    var moveZ = controlsLocked ? 0 : joyVector.y; // stick forward (up) is negative y
 
     var mag = Math.sqrt(moveX*moveX + moveZ*moveZ);
     if(mag > 0.15){
@@ -3818,6 +5206,7 @@
     // read as a much weaker hit than the dummy's dramatic launch even when
     // the underlying force was identical.
     var groundYHere = getGroundY(playerState.pos.x, playerState.pos.z);
+    var justLanded = false;
     if(playerState.knockVel.y !== 0 || playerState.pos.y > groundYHere){
       playerState.knockVel.y += KNOCK_GRAVITY * dt;
       playerState.pos.y += playerState.knockVel.y * dt;
@@ -3826,20 +5215,42 @@
         if(Math.abs(playerState.knockVel.y) > 1.5){
           // small bounce with energy loss, mirroring the dummy's landing feel
           playerState.knockVel.y *= -0.35;
+          // each bounce also sheds most of the horizontal speed (matches the
+          // dummies' *0.6 on bounce) so a kick reads as "flies a bit, lands,
+          // stops" instead of skating across the whole map
+          playerState.knockVel.x *= 0.6;
+          playerState.knockVel.z *= 0.6;
         } else {
           playerState.knockVel.y = 0;
+          justLanded = true;
         }
       }
     } else {
       playerState.pos.y = groundYHere;
+      justLanded = true;
     }
 
-    // decay horizontal knockback slowly (matches the dummies' near-frictionless
-    // air drag of 0.995/frame) rather than the old 0.9/frame, which killed
-    // almost all of a kick's momentum within a couple of frames and made
-    // kicking a player feel like a shove instead of the same hit a dummy gets
+    // air drag while actually airborne — near-frictionless, matching the
+    // dummies, so the arc of a kick/explosion looks the same for both
     playerState.knockVel.x *= 0.995;
     playerState.knockVel.z *= 0.995;
+
+    // once settled on the ground, kill remaining knockback outright (same
+    // as the dummies' d.vel.set(0,0,0) on settle) — otherwise the 0.995
+    // air-drag figure barely decays anything and the player rolls across
+    // the map for several seconds after every kick or explosion
+    if(justLanded){
+      if(playerState.knockVel.x*playerState.knockVel.x + playerState.knockVel.z*playerState.knockVel.z < 4){
+        playerState.knockVel.x = 0;
+        playerState.knockVel.z = 0;
+      } else {
+        // still moving fast at touchdown (e.g. a big explosion) — bleed it
+        // off quickly instead of an instant stop, but much faster than the
+        // in-air drag so it settles within a fraction of a second
+        playerState.knockVel.x *= 0.8;
+        playerState.knockVel.z *= 0.8;
+      }
+    }
 
     // solid rocks: push the player back out if walking into one
     resolveRockCollisions(playerState.pos, playerState.radius);
@@ -3882,6 +5293,7 @@
   var CAMERA_FORWARD_OFFSET = 0.35;
 
   function updateCamera(dt){
+    if(controlsLocked) return; // finale cutscene is driving the camera directly
     // first-person: camera sits at eye height, rotates with yaw/pitch from look control
     var gy = getGroundY(playerState.pos.x, playerState.pos.z);
     var forwardX = -Math.sin(playerState.yaw) * CAMERA_FORWARD_OFFSET;
@@ -3908,6 +5320,15 @@
     }
     updateDynamite(dt);
     updateExplosionEffects(dt);
+    updateNukeEffects(dt);
+
+    // King of the Hill: only the host (or the solo player, who is its own
+    // authority) actually advances the contest timers — guests just mirror
+    // HillGame.times from the host's snapshot. Everyone renders the panel.
+    if(!Net.isMultiplayer() || Net.isHost()){
+      updateHillContestAuthoritative(dt);
+    }
+    renderHillPanel();
 
     if(Net.isMultiplayer()){
       updateRemoteAvatars(dt);
@@ -3918,7 +5339,7 @@
         var myMag = Math.sqrt(joyVector.x*joyVector.x + joyVector.y*joyVector.y);
         var outState = {
           x: playerState.pos.x, y: playerState.pos.y, z: playerState.pos.z,
-          yaw: playerState.yaw, walking: myMag > 0.15
+          yaw: playerState.yaw, walking: myMag > 0.15, color: playerState.color
         };
         if(Net.isHost()){
           // the host doesn't send itself an 'input' packet — it just folds
