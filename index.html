@@ -372,6 +372,27 @@
     pointer-events:none;
     white-space:nowrap;
   }
+  #netDiagLog{
+    position:fixed;
+    left:10px; right:10px;
+    bottom: max(10px, env(safe-area-inset-bottom));
+    z-index:56;
+    max-height:26vh;
+    overflow-y:auto;
+    margin:0;
+    background:rgba(0,0,0,0.55);
+    border:1px solid rgba(255,255,255,0.15);
+    border-radius:10px;
+    padding:8px 10px;
+    font-family:monospace;
+    font-size:10px;
+    line-height:1.4;
+    color:rgba(200,255,220,0.85);
+    white-space:pre-wrap;
+    word-break:break-word;
+    display:none;
+  }
+  #netDiagLog:not(:empty){ display:block; }
 
   /* Joystick */
   #joystickZone{
@@ -512,6 +533,7 @@
   <div id="startScreen">
     <div class="logo">ПИНОК<span>.IO</span></div>
     <div class="sub">Беги, пинай манекенов и взрывай всё динамитом</div>
+    <div class="hint" style="margin-top:-6px;opacity:0.5;">v1</div>
     <button id="tapButton">ТАП ЧТОБЫ НАЧАТЬ</button>
     <div class="hint">Полноэкранный режим включится автоматически</div>
   </div>
@@ -544,13 +566,18 @@
     <button id="lobbyBackBtn" class="netBtn ghost">ОТМЕНА</button>
   </div>
 
+  <!-- Shared network diagnostics log — visible whenever modeScreen/roomScreen/
+       lobbyScreen is open, so connection issues can actually be read off
+       the device instead of guessed at -->
+  <pre id="netDiagLog"></pre>
+
   <!-- Small persistent net status badge shown during gameplay -->
   <div id="netBadge"></div>
 
   <!-- HUD -->
   <div id="hud">
     <div id="topBar">
-      <div id="topBadge">ПИНОК.IO — тест-полигон</div>
+      <div id="topBadge">ПИНОК.IO — тест-полигон · v1</div>
       <button id="settingsBtn" aria-label="Настройки">⚙️</button>
     </div>
 
@@ -710,6 +737,38 @@
   // (prefixed so we don't collide with unrelated peers on the public
   // broker), so "joining by code" needs no server of our own at all.
   // ---------------------------------------------------------------------
+  // ---------------------------------------------------------------------
+  // NETWORK DIAGNOSTICS — a tiny visible log so connection failures on a
+  // real device (especially awkward topologies: phone tethered off
+  // another phone's mobile hotspot) can actually be diagnosed instead of
+  // guessed at. Shown inline in the lobby screens.
+  // ---------------------------------------------------------------------
+  var NetDiag = (function(){
+    var lines = [];
+    var el = null;
+    function ensureEl(){
+      if(el) return el;
+      el = document.getElementById('netDiagLog');
+      return el;
+    }
+    function log(msg){
+      var ts = new Date().toISOString().slice(11,19);
+      lines.push('[' + ts + '] ' + msg);
+      if(lines.length > 40) lines.shift();
+      var node = ensureEl();
+      if(node){
+        node.textContent = lines.join('\n');
+        node.scrollTop = node.scrollHeight;
+      }
+    }
+    function clear(){
+      lines = [];
+      var node = ensureEl();
+      if(node) node.textContent = '';
+    }
+    return { log: log, clear: clear };
+  })();
+
   var Net = (function(){
     var ROOM_PREFIX = 'pinokio-room-';
     var MAX_PLAYERS = 8;
@@ -746,16 +805,20 @@
             iceServers: [
               { urls: 'stun:stun.l.google.com:19302' },
               { urls: 'stun:stun1.l.google.com:19302' },
-              // TURN relay fallback — required when at least one side is
-              // behind a NAT that STUN alone can't traverse (very common on
-              // mobile/carrier networks). Without this, two phones on
-              // cellular data frequently can never establish a direct P2P
-              // link even though signalling succeeds and the room "exists".
+              // Free, no-signup-required TURN relay (openrelay.metered.ca) —
+              // required whenever either side is behind a NAT that STUN
+              // alone can't traverse (very common with mobile hotspot
+              // chains: phone-behind-hotspot-behind-carrier-NAT). Listing
+              // UDP, the 443 TCP port, and TLS-over-TCP together lets ICE
+              // pick whichever transport actually gets through the
+              // strictest of the two networks' firewalls.
               {
                 urls: [
                   'turn:openrelay.metered.ca:80',
+                  'turn:openrelay.metered.ca:80?transport=tcp',
                   'turn:openrelay.metered.ca:443',
-                  'turn:openrelay.metered.ca:443?transport=tcp'
+                  'turn:openrelay.metered.ca:443?transport=tcp',
+                  'turns:openrelay.metered.ca:443?transport=tcp'
                 ],
                 username: 'openrelayproject',
                 credential: 'openrelayproject'
@@ -769,7 +832,64 @@
       }
       p.on('open', function(assignedId){ onOpen(assignedId); });
       p.on('error', function(err){ onErr(err); });
+
+      // ---- ICE diagnostics ----------------------------------------------
+      // Surfaces exactly what's happening at the WebRTC layer instead of
+      // leaving the person staring at a generic "room not found" message.
+      // PeerJS exposes the underlying RTCPeerConnection once a connection
+      // object exists, so we hook every new connection the moment it's
+      // created (both outgoing 'connection' triggers on p.connect and
+      // incoming ones via p.on('connection')) and log ICE state + which
+      // candidate type actually got used (host/srflx/relay) to the debug
+      // panel via NetDiag (defined further down).
+      var origConnect = p.connect.bind(p);
+      p.connect = function(){
+        var c = origConnect.apply(p, arguments);
+        attachIceDiagnostics(c);
+        return c;
+      };
+      p.on('connection', function(c){ attachIceDiagnostics(c); });
+
       return p;
+    }
+
+    function attachIceDiagnostics(conn){
+      if(!conn || conn.__diagAttached) return;
+      conn.__diagAttached = true;
+      conn.on('open', function(){
+        var pc = conn.peerConnection;
+        if(!pc){ NetDiag.log('нет peerConnection у ' + conn.peer); return; }
+        NetDiag.log('ICE: соединение с ' + conn.peer + ' открыто');
+        pc.addEventListener('iceconnectionstatechange', function(){
+          NetDiag.log('ICE state (' + conn.peer + '): ' + pc.iceConnectionState);
+        });
+        pc.addEventListener('icecandidateerror', function(ev){
+          NetDiag.log('ICE candidate error (' + conn.peer + '): ' + (ev.errorText || ev.errorCode || 'unknown'));
+        });
+        // once connected, inspect which candidate pair actually won —
+        // 'relay' means TURN saved the connection, 'srflx'/'host' means a
+        // direct route worked without needing relay at all
+        setTimeout(function(){
+          if(!pc.getStats) return;
+          pc.getStats(null).then(function(stats){
+            stats.forEach(function(report){
+              if(report.type === 'candidate-pair' && report.state === 'succeeded'){
+                var localType = '?';
+                stats.forEach(function(r2){
+                  if(r2.id === report.localCandidateId) localType = r2.candidateType;
+                });
+                NetDiag.log('Активный маршрут (' + conn.peer + '): ' + localType);
+              }
+            });
+          }).catch(function(){});
+        }, 2500);
+      });
+      conn.on('error', function(err){
+        NetDiag.log('Connection error (' + conn.peer + '): ' + (err && err.message ? err.message : err));
+      });
+      conn.on('close', function(){
+        NetDiag.log('Connection closed: ' + conn.peer);
+      });
     }
 
     function broadcastToGuests(msg, exceptId){
@@ -787,12 +907,17 @@
       state.roomCode = randomCode(6);
       state.players = { host: { name: 'Хост', connected: true } };
 
+      NetDiag.clear();
+      NetDiag.log('Создаём комнату, код ' + state.roomCode + '…');
+
       var peerId = ROOM_PREFIX + state.roomCode;
       state.peer = makePeer(peerId, function(){
+        NetDiag.log('Peer открыт, сигнальный сервер подключён');
         displayCb(null, state.roomCode);
         fireListChange();
       }, function(err){
         var msg = describeError(err);
+        NetDiag.log('Ошибка peer: ' + (err && err.type ? err.type : err));
         displayCb(msg, null);
         if(state.onError) state.onError(msg);
       });
@@ -800,6 +925,7 @@
       if(!state.peer) return;
 
       state.peer.on('connection', function(conn){
+        NetDiag.log('Входящее подключение от ' + conn.peer);
         if(Object.keys(state.players).length >= MAX_PLAYERS){
           conn.on('open', function(){
             conn.send({ t:'full' });
@@ -883,27 +1009,38 @@
       state.role = 'guest';
       state.roomCode = code;
 
+      NetDiag.clear();
+      NetDiag.log('Подключаемся к комнате ' + code + '…');
+
       state.peer = makePeer(null, function(assignedPeerId){
         state.myId = assignedPeerId;
+        NetDiag.log('Peer открыт, наш id: ' + assignedPeerId);
         var hostPeerId = ROOM_PREFIX + code;
+        NetDiag.log('Звоним хосту: ' + hostPeerId);
         var conn = state.peer.connect(hostPeerId, { reliable: true });
         var settled = false;
 
+        // 20s (not 9s) — TURN-relayed handshakes over double-NAT chains
+        // (e.g. phone tethered to another phone's mobile hotspot) can take
+        // noticeably longer to negotiate than a direct STUN connection.
         var timeout = setTimeout(function(){
           if(!settled){
             settled = true;
-            displayCb('Комната не найдена. Проверь код.', null);
+            NetDiag.log('Таймаут 20с — соединение не установлено');
+            displayCb('Не удалось подключиться за 20 секунд. Проверь код и сеть.', null);
           }
-        }, 9000);
+        }, 20000);
 
         conn.on('open', function(){
           state.hostConn = conn;
+          NetDiag.log('Канал данных с хостом открыт');
         });
 
         conn.on('data', function(msg){
           if(!msg || !msg.t) return;
           if(msg.t === 'full'){
             if(!settled){ settled = true; clearTimeout(timeout); }
+            NetDiag.log('Комната заполнена');
             displayCb('Комната уже заполнена (максимум ' + MAX_PLAYERS + ').', null);
             return;
           }
@@ -911,6 +1048,7 @@
             if(!settled){
               settled = true;
               clearTimeout(timeout);
+              NetDiag.log('Приняты в комнату');
               state.players = msg.players;
               displayCb(null, state.roomCode);
               fireListChange();
@@ -921,9 +1059,11 @@
         });
 
         conn.on('close', function(){
+          NetDiag.log('Соединение с хостом закрыто');
           if(state.onError) state.onError('Соединение с хостом потеряно.');
         });
-        conn.on('error', function(){
+        conn.on('error', function(err){
+          NetDiag.log('Ошибка соединения: ' + (err && err.message ? err.message : err));
           if(!settled){
             settled = true;
             clearTimeout(timeout);
@@ -932,6 +1072,7 @@
         });
       }, function(err){
         var msg = describeError(err);
+        NetDiag.log('Ошибка peer: ' + (err && err.type ? err.type : err));
         displayCb(msg, null);
       });
     }
