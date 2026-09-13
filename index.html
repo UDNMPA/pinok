@@ -877,14 +877,13 @@
       return out;
     }
 
-    // ⚠️ REPLACE THESE with your own free Metered.ca Open Relay credentials.
-    // The shared public openrelayproject/openrelayproject login is
-    // currently rejecting allocations (error 400) — it's been overused by
-    // countless unrelated projects and is throttled/banned as a result.
-    // Sign up free (20 GB/mo) at https://www.metered.ca/tools/openrelay/,
-    // then paste your personal username/credential from the dashboard here.
-    var TURN_USERNAME = '353e90e58d6cd9b600186d85';
-    var TURN_CREDENTIAL = 'H1fmhBtyDtTbEpa3';
+    // TURN credentials from turnix.io (EU Central region), free tier, no
+    // credit card required. This credential was created with a long TTL
+    // (5000 days / ~13.7 years) directly in the turnix.io dashboard, so it
+    // behaves like a static long-lived credential rather than a short-lived
+    // token — no need to hit their REST API at runtime to mint one.
+    var TURN_USERNAME = 'e7b38fe0-4240-422a-8fa2-f4e1e41dff2a';
+    var TURN_CREDENTIAL = 'a8319b82c39258dbadfa3996c420f3bb';
 
     function makePeer(id, onOpen, onErr){
       var p;
@@ -895,6 +894,7 @@
             iceServers: [
               { urls: 'stun:stun.l.google.com:19302' },
               { urls: 'stun:stun1.l.google.com:19302' },
+              { urls: 'stun:stun.turnix.io:3478' },
               // TURN relay fallback — required whenever either side is
               // behind a NAT that STUN alone can't traverse (very common
               // with mobile hotspot chains: phone-behind-hotspot-behind-
@@ -904,11 +904,10 @@
               // firewalls.
               {
                 urls: [
-                  'turn:openrelay.metered.ca:80',
-                  'turn:openrelay.metered.ca:80?transport=tcp',
-                  'turn:openrelay.metered.ca:443',
-                  'turn:openrelay.metered.ca:443?transport=tcp',
-                  'turns:openrelay.metered.ca:443?transport=tcp'
+                  'turn:eu-central.turnix.io:3478?transport=udp',
+                  'turn:eu-central.turnix.io:3478?transport=tcp',
+                  'turns:eu-central.turnix.io:443?transport=udp',
+                  'turns:eu-central.turnix.io:443?transport=tcp'
                 ],
                 username: TURN_USERNAME,
                 credential: TURN_CREDENTIAL
@@ -977,8 +976,8 @@
         });
         pc.addEventListener('icecandidateerror', function(ev){
           NetDiag.log('ICE candidate ошибка (' + conn.peer + '): код ' + ev.errorCode + ' ' + (ev.errorText || '') + (ev.url ? (' [' + ev.url + ']') : ''));
-          if(ev.errorCode === 400 && ev.url && ev.url.indexOf('openrelay.metered.ca') !== -1){
-            NetDiag.log('⚠ TURN-сервер отклонил общие credentials (перегружены/забанены). Нужен личный ключ — см. TURN_USERNAME/TURN_CREDENTIAL в коде.');
+          if(ev.errorCode === 401 && ev.url && ev.url.indexOf('turnix.io') !== -1){
+            NetDiag.log('⚠ TURN-сервер turnix.io отклонил credentials (истёк срок действия или отозваны). См. TURN_USERNAME/TURN_CREDENTIAL в коде.');
           }
         });
         pc.addEventListener('icecandidate', function(ev){
