@@ -373,26 +373,8 @@
     white-space:nowrap;
   }
   #netDiagLog{
-    position:fixed;
-    left:10px; right:10px;
-    bottom: max(10px, env(safe-area-inset-bottom));
-    z-index:56;
-    max-height:26vh;
-    overflow-y:auto;
-    margin:0;
-    background:rgba(0,0,0,0.55);
-    border:1px solid rgba(255,255,255,0.15);
-    border-radius:10px;
-    padding:8px 10px;
-    font-family:monospace;
-    font-size:10px;
-    line-height:1.4;
-    color:rgba(200,255,220,0.85);
-    white-space:pre-wrap;
-    word-break:break-word;
-    display:none;
+    display:none !important;
   }
-  #netDiagLog:not(:empty){ display:block; }
 
   /* Joystick */
   #joystickZone{
@@ -486,6 +468,96 @@
     filter:grayscale(0.6);
     pointer-events:none;
   }
+  #chatBtn{
+    background:var(--mint);
+    box-shadow:0 6px 0 #2bb87d, 0 9px 16px rgba(0,0,0,0.35);
+    color:var(--ink);
+    width:64px; height:64px;
+    font-size:10px;
+  }
+  #chatBtn .icon{ font-size:22px; }
+  #chatBtn:active{
+    transform:translateY(6px) scale(0.95);
+    box-shadow:0 1px 0 #2bb87d, 0 3px 8px rgba(0,0,0,0.3);
+  }
+
+  /* Chat text input bar — hidden until the chat button is tapped */
+  #chatInputBar{
+    position:fixed;
+    left:50%;
+    bottom: max(18px, env(safe-area-inset-bottom));
+    transform:translateX(-50%);
+    display:none;
+    align-items:center;
+    gap:8px;
+    z-index:35;
+    width:min(92vw, 420px);
+    pointer-events:auto;
+  }
+  #chatInputBar.show{ display:flex; }
+  #chatInput{
+    flex:1;
+    font-family:'Baloo 2', sans-serif;
+    font-weight:700;
+    font-size:15px;
+    color:var(--ink);
+    background:var(--paper);
+    border:3px solid var(--yellow);
+    border-radius:16px;
+    padding:12px 14px;
+    outline:none;
+    user-select:text;
+    -webkit-user-select:text;
+    touch-action:manipulation;
+  }
+  #chatSendBtn{
+    width:46px; height:46px;
+    flex-shrink:0;
+    border-radius:50%;
+    border:none;
+    background:var(--yellow);
+    color:var(--ink);
+    font-size:18px;
+    font-weight:800;
+    box-shadow:0 5px 0 var(--yellow-dark);
+    cursor:pointer;
+  }
+  #chatSendBtn:active{
+    transform:translateY(4px);
+    box-shadow:0 1px 0 var(--yellow-dark);
+  }
+
+  /* Thought-bubble chat popup shown above a player's head */
+  .thoughtBubble{
+    position:absolute;
+    transform:translate(-50%,-100%);
+    background:var(--paper);
+    color:var(--ink);
+    font-weight:700;
+    font-size:13px;
+    padding:8px 14px;
+    border-radius:18px;
+    border:2px solid rgba(26,27,46,0.15);
+    box-shadow:0 4px 10px rgba(0,0,0,0.25);
+    pointer-events:none;
+    white-space:nowrap;
+    max-width:220px;
+    white-space:normal;
+    word-break:break-word;
+    text-align:center;
+    display:none;
+  }
+  .thoughtBubble::after{
+    content:'';
+    position:absolute;
+    left:50%; bottom:-7px;
+    transform:translateX(-50%);
+    width:0; height:0;
+    border-left:7px solid transparent;
+    border-right:7px solid transparent;
+    border-top:8px solid var(--paper);
+  }
+  .thoughtBubble.show{ display:block; }
 
   /* prompt bubble e.g. "МОЖНО ПНУТЬ!" */
   #proximityHint{
@@ -599,6 +671,15 @@
         <div class="icon">🧨</div>
         ДИНАМИТ
       </button>
+      <button id="chatBtn" class="actionBtn">
+        <div class="icon">💬</div>
+        ЧАТ
+      </button>
+    </div>
+
+    <div id="chatInputBar">
+      <input type="text" id="chatInput" maxlength="50" placeholder="Что сказать? (макс 50)" autocomplete="off">
+      <button id="chatSendBtn">➤</button>
     </div>
 
     <div id="settingsPanel">
@@ -1134,6 +1215,11 @@
         if(state.onRemoteEvent) state.onRemoteEvent({ t:'peerState', id: msg.id, state: msg.state });
       } else if(msg.t === 'event'){
         if(state.onRemoteEvent) state.onRemoteEvent(msg);
+      } else if(msg.t === 'start'){
+        // host broadcasts { t:'start' } directly (not wrapped in an 'event'
+        // envelope) via hostBroadcastEvent — route it to onRemoteEvent too,
+        // so lobby/game code listening for evt.t === 'start' actually fires.
+        if(state.onRemoteEvent) state.onRemoteEvent(msg);
       }
     }
 
@@ -1649,6 +1735,7 @@
     setupLookControl();
     setupKickButton();
     setupDynamiteButton();
+    setupChat();
     setupSettingsPanel();
 
     if(Net.isMultiplayer()) setupNetworkedPlay();
@@ -1932,9 +2019,15 @@
     tag.textContent = info ? info.name : ('Игрок ' + Net.shortId(pid));
     document.getElementById('hud').appendChild(tag);
 
+    var bubble = document.createElement('div');
+    bubble.className = 'thoughtBubble';
+    document.getElementById('hud').appendChild(bubble);
+
     return {
       mesh: mesh,
       tag: tag,
+      bubble: bubble,
+      bubbleTimer: 0,
       pos: mesh.position.clone(),
       targetPos: mesh.position.clone(),
       yaw: 0,
@@ -1950,6 +2043,7 @@
     if(!r) return;
     scene.remove(r.mesh);
     if(r.tag && r.tag.parentNode) r.tag.parentNode.removeChild(r.tag);
+    if(r.bubble && r.bubble.parentNode) r.bubble.parentNode.removeChild(r.bubble);
     delete remotePlayers[pid];
   }
 
@@ -1962,6 +2056,16 @@
     r.targetPos.set(s.x, s.y, s.z);
     r.targetYaw = s.yaw;
     r.walking = !!s.walking;
+  }
+
+  var CHAT_BUBBLE_DURATION = 5; // seconds a chat bubble stays visible
+
+  function showRemoteChatBubble(pid, text){
+    var r = remotePlayers[pid];
+    if(!r) return;
+    r.bubble.textContent = text;
+    r.bubble.classList.add('show');
+    r.bubbleTimer = CHAT_BUBBLE_DURATION;
   }
 
   function updateRemoteAvatars(dt){
@@ -1991,16 +2095,29 @@
         parts.armR.rotation.x = THREE.MathUtils.lerp(parts.armR.rotation.x, 0, 0.2);
       }
 
+      // count down the chat bubble and hide it once its time is up
+      if(r.bubbleTimer > 0){
+        r.bubbleTimer -= dt;
+        if(r.bubbleTimer <= 0) r.bubble.classList.remove('show');
+      }
+
       // project name tag above the head into screen space
       var headPos = r.pos.clone();
       headPos.y += 2.05;
       var screenPos = headPos.project(camera);
       if(screenPos.z > 1){
         r.tag.style.display = 'none';
+        r.bubble.style.display = 'none';
       } else {
         r.tag.style.display = 'block';
-        r.tag.style.left = ((screenPos.x*0.5+0.5) * window.innerWidth) + 'px';
-        r.tag.style.top = ((-screenPos.y*0.5+0.5) * window.innerHeight) + 'px';
+        var sx = (screenPos.x*0.5+0.5) * window.innerWidth;
+        var sy = (-screenPos.y*0.5+0.5) * window.innerHeight;
+        r.tag.style.left = sx + 'px';
+        r.tag.style.top = sy + 'px';
+        // bubble sits a bit further above the head than the name tag
+        r.bubble.style.display = '';
+        r.bubble.style.left = sx + 'px';
+        r.bubble.style.top = (sy - 22) + 'px';
       }
     }
   }
@@ -2072,6 +2189,39 @@
         applyKickToDummy(dummies[payload.dummyIdx], payload.dx, payload.dz);
         Net.hostBroadcastEvent({ t:'event', payload:{ t:'kick', dummyIdx: payload.dummyIdx, x: payload.x, z: payload.z, dx: payload.dx, dz: payload.dz } });
       }
+    } else if(payload.t === 'kickPlayer'){
+      // a guest reports kicking another player (possibly us, possibly a
+      // third guest). Only the host re-simulates this authoritatively:
+      // it re-checks range from the kicker's reported position to the
+      // target's last-known host-side position, then relays the personal
+      // knockback straight to the target's connection (or applies it
+      // locally if the target is the host itself).
+      AudioEngine.playKick(new THREE.Vector3(payload.x, 0, payload.z));
+      if(isHost){
+        var targetId = payload.targetId;
+        var targetPos = null;
+        if(targetId === Net.state.myId){
+          targetPos = playerState.pos;
+        } else if(remotePlayers[targetId]){
+          targetPos = remotePlayers[targetId].pos;
+        }
+        if(targetPos){
+          var kdx = targetPos.x - payload.x;
+          var kdz = targetPos.z - payload.z;
+          var kdist = Math.sqrt(kdx*kdx + kdz*kdz);
+          if(kdist < KICK_RANGE + 1.0){ // small slack for network lag between report and host state
+            if(targetId === Net.state.myId){
+              var vel = new THREE.Vector3(payload.dx * PLAYER_KICK_FORCE, PLAYER_KICK_UP, payload.dz * PLAYER_KICK_FORCE);
+              playerState.knockVel.add(vel);
+            } else {
+              applyKickToRemotePlayer(targetId, payload.dx, payload.dz);
+            }
+            // echo the sound to everyone else (kicker and target already
+            // know about it through their own local sound / knockback)
+            Net.hostBroadcastEvent({ t:'event', payload:{ t:'kickPlayerFx', x: payload.x, z: payload.z } });
+          }
+        }
+      }
     } else if(payload.t === 'throw'){
       if(isHost){
         var dyn = spawnDynamiteVisual(payload.startX, payload.startZ, payload.targetX, payload.targetZ, false);
@@ -2093,6 +2243,26 @@
       playerState.knockVel.x += payload.vx;
       playerState.knockVel.y += payload.vy;
       playerState.knockVel.z += payload.vz;
+    } else if(payload.t === 'kickPlayerFx'){
+      // sound-only echo of a player-vs-player kick that happened elsewhere,
+      // so every guest hears it even though the knockback itself is only
+      // sent to the one player who got kicked
+      if(!isHost) AudioEngine.playKick(new THREE.Vector3(payload.x, 0, payload.z));
+    } else if(payload.t === 'chat'){
+      // clamp again on receive — never trust a guest's client to have
+      // enforced the 50-char limit itself
+      var text = (payload.text || '').slice(0, CHAT_MAX_LEN);
+      // the actual author's id: for a bubble relayed by the host on behalf
+      // of another guest, hostBroadcastEvent overwrites evt.id with the
+      // host's own id, so the true author travels inside payload.fromId
+      // instead (set below when the host first relays it)
+      var authorId = payload.fromId || originId;
+      if(text) showRemoteChatBubble(authorId, text);
+      if(isHost){
+        // relay the chat bubble on to every other connected guest, tagged
+        // with the original author's id so nested relays stay correct
+        Net.hostBroadcastEvent({ t:'event', payload:{ t:'chat', text: text, fromId: originId } });
+      }
     }
   }
 
@@ -2339,6 +2509,7 @@
   var KICK_RANGE = 1.95;
   var kickCooldown = 0;
   var nearestDummy = null;
+  var nearestPlayerId = null; // pid of nearest remote player in kick range, if closer than nearestDummy
 
   function setupKickButton(){
     kickBtn.addEventListener('touchstart', function(e){
@@ -2352,6 +2523,7 @@
 
   function updateKickAvailability(){
     nearestDummy = null;
+    nearestPlayerId = null;
     var best = KICK_RANGE;
     for(var i=0;i<dummies.length;i++){
       var d = dummies[i];
@@ -2363,10 +2535,26 @@
       if(dist < best){
         best = dist;
         nearestDummy = d;
+        nearestPlayerId = null;
       }
     }
 
-    var available = (nearestDummy !== null) && kickCooldown <= 0;
+    if(Net.isMultiplayer()){
+      for(var pid in remotePlayers){
+        var r = remotePlayers[pid];
+        var pdist = Math.sqrt(
+          Math.pow(r.pos.x - playerState.pos.x, 2) +
+          Math.pow(r.pos.z - playerState.pos.z, 2)
+        );
+        if(pdist < best){
+          best = pdist;
+          nearestPlayerId = pid;
+          nearestDummy = null;
+        }
+      }
+    }
+
+    var available = (nearestDummy !== null || nearestPlayerId !== null) && kickCooldown <= 0;
     if(available){
       kickBtn.classList.remove('disabled');
       proximityHint.classList.add('show');
@@ -2384,29 +2572,52 @@
     d.airborne = true;
   }
 
-  function doKick(){
-    if(!nearestDummy || kickCooldown > 0) return;
+  var PLAYER_KICK_FORCE = 13;
+  var PLAYER_KICK_UP = 7;
 
-    var d = nearestDummy;
-    // direction from player to dummy (horizontal)
-    var dx = d.pos.x - playerState.pos.x;
-    var dz = d.pos.z - playerState.pos.z;
+  function doKick(){
+    if(kickCooldown > 0) return;
+    if(!nearestDummy && !nearestPlayerId) return;
+
+    var targetPos = nearestPlayerId ? remotePlayers[nearestPlayerId].pos : nearestDummy.pos;
+    // direction from player to target (horizontal)
+    var dx = targetPos.x - playerState.pos.x;
+    var dz = targetPos.z - playerState.pos.z;
     var len = Math.sqrt(dx*dx + dz*dz) || 1;
     dx /= len; dz /= len;
 
-    if(Net.isMultiplayer() && !Net.isHost()){
-      // guest: don't touch physics locally (host owns dummy state and will
-      // reflect the real outcome in its next snapshot) — just send the
-      // action and play the impact sound immediately so input still feels responsive
-      var idx = dummies.indexOf(d);
-      Net.guestSendEvent({ t:'kick', dummyIdx: idx, x: d.pos.x, z: d.pos.z, dx: dx, dz: dz });
-      AudioEngine.playKick(d.pos);
+    if(nearestPlayerId){
+      // kicking another player: this is always resolved by whoever is
+      // authoritative for that player (the host), since only the host
+      // relays a personal knockback impulse straight to that player's
+      // own connection. We just report the kick + play our local sound;
+      // the target feels it once the host's knockback event arrives.
+      AudioEngine.playKick(targetPos);
+      if(Net.isHost()){
+        applyKickToRemotePlayer(nearestPlayerId, dx, dz);
+        // let every other connected guest hear/see this kick too (mirrors
+        // how dummy kicks are broadcast) — the target itself gets its
+        // knockback separately via applyKickToRemotePlayer above
+        Net.hostBroadcastEvent({ t:'event', payload:{ t:'kickPlayerFx', x: targetPos.x, z: targetPos.z } });
+      } else {
+        Net.guestSendEvent({ t:'kickPlayer', targetId: nearestPlayerId, x: targetPos.x, z: targetPos.z, dx: dx, dz: dz });
+      }
     } else {
-      applyKickToDummy(d, dx, dz);
-      AudioEngine.playKick(d.pos);
-      if(Net.isMultiplayer() && Net.isHost()){
-        var hostIdx = dummies.indexOf(d);
-        Net.hostBroadcastEvent({ t:'event', payload:{ t:'kick', dummyIdx: hostIdx, x: d.pos.x, z: d.pos.z, dx: dx, dz: dz } });
+      var d = nearestDummy;
+      if(Net.isMultiplayer() && !Net.isHost()){
+        // guest: don't touch physics locally (host owns dummy state and will
+        // reflect the real outcome in its next snapshot) — just send the
+        // action and play the impact sound immediately so input still feels responsive
+        var idx = dummies.indexOf(d);
+        Net.guestSendEvent({ t:'kick', dummyIdx: idx, x: d.pos.x, z: d.pos.z, dx: dx, dz: dz });
+        AudioEngine.playKick(d.pos);
+      } else {
+        applyKickToDummy(d, dx, dz);
+        AudioEngine.playKick(d.pos);
+        if(Net.isMultiplayer() && Net.isHost()){
+          var hostIdx = dummies.indexOf(d);
+          Net.hostBroadcastEvent({ t:'event', payload:{ t:'kick', dummyIdx: hostIdx, x: d.pos.x, z: d.pos.z, dx: dx, dz: dz } });
+        }
       }
     }
 
@@ -2420,6 +2631,19 @@
     setTimeout(function(){ kickBtn.style.transform = ''; }, 120);
 
     kickCooldown = 0.5;
+  }
+
+  // host-only: apply a kick impulse to another connected player. If the
+  // target is the host's own local player (shouldn't normally happen since
+  // remotePlayers never contains our own id, but kept defensive), it's a
+  // no-op; otherwise relay a personal knockback straight to that player's
+  // connection, same channel used for explosion knockback.
+  function applyKickToRemotePlayer(targetId, dx, dz){
+    var vel = new THREE.Vector3(dx * PLAYER_KICK_FORCE, PLAYER_KICK_UP, dz * PLAYER_KICK_FORCE);
+    var conn = Net.state.conns[targetId];
+    if(conn && conn.open){
+      conn.send({ t:'event', id: Net.state.myId, payload:{ t:'knockback', vx: vel.x, vy: vel.y, vz: vel.z } });
+    }
   }
 
   function updateDummyPhysics(dt){
@@ -2476,6 +2700,63 @@
 
       d.mesh.position.copy(d.pos);
     }
+  }
+
+  // ---------------------------------------------------------------------
+  // CHAT MECHANIC — short text bubbles ("thought bubbles") over players'
+  // heads. Local player types into a small input bar; the message is
+  // capped at 50 chars (also enforced server-side-ish via truncation on
+  // receive, since a guest's client could be tampered with) and relayed
+  // to everyone else as a gameplay event. Bubbles auto-hide after 5s.
+  // ---------------------------------------------------------------------
+  var CHAT_MAX_LEN = 50;
+  var chatBtn = document.getElementById('chatBtn');
+  var chatInputBar = document.getElementById('chatInputBar');
+  var chatInput = document.getElementById('chatInput');
+  var chatSendBtn = document.getElementById('chatSendBtn');
+
+  function setupChat(){
+    function openChatInput(){
+      chatInputBar.classList.add('show');
+      chatInput.value = '';
+      chatInput.focus();
+    }
+    function closeChatInput(){
+      chatInputBar.classList.remove('show');
+      chatInput.blur();
+    }
+    function sendChat(){
+      var text = chatInput.value.trim().slice(0, CHAT_MAX_LEN);
+      closeChatInput();
+      if(!text) return;
+
+      if(Net.isMultiplayer() && Net.isHost()){
+        Net.hostBroadcastEvent({ t:'event', payload:{ t:'chat', text: text } });
+      } else if(Net.isMultiplayer() && !Net.isHost()){
+        Net.guestSendEvent({ t:'chat', text: text });
+      }
+      // solo play: nobody else to show it to, but no-op is fine — the
+      // button still works, it just has no audience
+    }
+
+    chatBtn.addEventListener('touchstart', function(e){
+      e.preventDefault();
+      openChatInput();
+    }, {passive:false});
+    chatBtn.addEventListener('click', function(){
+      openChatInput();
+    });
+
+    chatSendBtn.addEventListener('click', sendChat);
+    chatSendBtn.addEventListener('touchstart', function(e){
+      e.preventDefault();
+      sendChat();
+    }, {passive:false});
+
+    chatInput.addEventListener('keydown', function(e){
+      if(e.key === 'Enter') sendChat();
+      else if(e.key === 'Escape') closeChatInput();
+    });
   }
 
   // ---------------------------------------------------------------------
