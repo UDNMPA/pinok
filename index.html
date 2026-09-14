@@ -800,6 +800,34 @@
     text-shadow:0 2px 0 rgba(0,0,0,0.35);
   }
   #hillTimer.active{ color:var(--yellow); }
+  /* final few seconds before a King of the Hill win: a steady looping pulse
+     so the panel itself communicates "almost there" without needing to
+     read the number */
+  #hillTimer.urgent{
+    color:var(--coral);
+    animation: hillUrgentPulse 0.6s ease-in-out infinite;
+  }
+  @keyframes hillUrgentPulse{
+    0%,100%{ transform:scale(1); }
+    50%{ transform:scale(1.14); }
+  }
+
+  #coordsDisplay{
+    position:absolute;
+    top:70px; right:12px;
+    z-index:21;
+    background:rgba(10,14,24,0.78);
+    border:2px solid rgba(125,211,252,0.6);
+    border-radius:12px;
+    padding:8px 12px;
+    color:#bfe8ff;
+    font-family:'Courier New', monospace;
+    font-size:12px;
+    line-height:1.5;
+    letter-spacing:0.3px;
+    pointer-events:none;
+    white-space:pre;
+  }
   .hillPlayerRow{
     display:flex;
     justify-content:space-between;
@@ -933,6 +961,8 @@
     <div id="proximityHint">👟 МОЖНО ПНУТЬ!</div>
     <div id="hitTextLayer"></div>
     <div id="comboBadge"></div>
+
+    <div id="coordsDisplay" style="display:none;">X: 0.0  Y: 0.0  Z: 0.0</div>
 
     <!-- King of the Hill: side panel with the big countdown-to-win timer
          and a per-player list showing how long each has held the circle -->
@@ -2104,6 +2134,26 @@
       crackGain.connect(localGain);
       crack.start(t);
       crack.stop(t + 0.12);
+
+      // low rumble tail — a filtered noise bed that comes in just after the
+      // initial boom and lingers longer than the other three layers, giving
+      // the blast a sense of aftermath/weight instead of ending abruptly
+      // the instant the crack and whump finish
+      var rumble = ctx.createBufferSource();
+      rumble.buffer = getNoiseBuffer();
+      var rumbleFilter = ctx.createBiquadFilter();
+      rumbleFilter.type = 'lowpass';
+      rumbleFilter.frequency.setValueAtTime(300, t + 0.1);
+      rumbleFilter.frequency.exponentialRampToValueAtTime(60, t + 1.3);
+      var rumbleGain = ctx.createGain();
+      rumbleGain.gain.setValueAtTime(0.0001, t + 0.1);
+      rumbleGain.gain.exponentialRampToValueAtTime(0.32, t + 0.22);
+      rumbleGain.gain.exponentialRampToValueAtTime(0.001, t + 1.3);
+      rumble.connect(rumbleFilter);
+      rumbleFilter.connect(rumbleGain);
+      rumbleGain.connect(localGain);
+      rumble.start(t + 0.1);
+      rumble.stop(t + 1.35);
     }
 
     return {
@@ -2133,6 +2183,9 @@
   var dummies = []; // NPC manikins
   var dynamites = []; // active thrown dynamite objects
   var explosionEffects = [];
+  var scorchMarks = []; // fading burn decals left on the ground after a blast
+  var dustPuffs = []; // small ground-impact dust clouds (landings, kicks)
+  var smokePuffs = []; // lingering post-blast smoke, tracked separately so it can outlive the flash/spark layer
 
   var WORLD_SIZE = 160;
 
@@ -2147,8 +2200,10 @@
     renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias:true });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.BasicShadowMap;
+    // shadows disabled globally — this one flag turns off shadow rendering
+    // for every light/mesh in the scene, regardless of their individual
+    // castShadow/receiveShadow flags, so nothing else needs to change
+    renderer.shadowMap.enabled = false;
 
     clock = new THREE.Clock();
 
@@ -2253,6 +2308,49 @@
     capRadius: 10,      // flat top platform radius (where the red circle/contest zone lives)
     redRadius: 5         // the red "stand here" circle painted on the summit
   };
+
+  // SEWER PIPE — the pipe mouth is set into the side of the King-of-the-Hill
+  // mound itself (its own short branch forks off right where the hill's
+  // branch path starts), so the pipe reads as built into the hill's slope
+  // rather than as a separate feature. Walking right up to the mouth
+  // smoothly fades the screen and drops the player into a small decorated
+  // sewer room tucked far away under the map; the sewer's own return pipe
+  // sends them back up top, right back out of the hillside.
+  var PIPE = {
+    // mouth angle/anchor are resolved against HILL below, once HILL exists,
+    // so the pipe always sits on the hill's actual slope regardless of any
+    // later HILL tuning
+    mouthAngle: Math.PI/2,  // measured around the hill's center; the path approaches from -X, so PI/2 (+Z) is the hill's side, not its front
+    mouthRadius: 1.5,
+    triggerRadius: 2.5, // how close the player must be to the mouth to trigger the drop
+    // sewer room — a separate pocket of the world, tucked far away so it
+    // never visually overlaps the outdoor map
+    roomX: 0,
+    roomZ: -300,
+    roomRadius: 9,
+    roomHeight: 4.4,
+    returnTriggerRadius: 2.0
+  };
+  // resolve the pipe mouth to a point on the hill's actual sloped surface:
+  // sit it partway down the flank (between the flat cap and the outer base)
+  // so it looks embedded in the hillside rather than at the summit or buried
+  // at the very bottom
+  (function(){
+    var d = HILL.capRadius + (HILL.arenaRadius - HILL.capRadius) * 0.55;
+    PIPE.mouthX = HILL.arenaX + Math.cos(PIPE.mouthAngle) * d;
+    PIPE.mouthZ = HILL.arenaZ + Math.sin(PIPE.mouthAngle) * d;
+    PIPE.mouthY = hillGroundHeightForPipe(d);
+  })();
+
+  // standalone copy of the hill's height falloff formula (mouth-position
+  // math above runs before setupHillArena, so it can't call hillGroundHeight
+  // yet, but the formula only needs HILL's constants, already defined)
+  function hillGroundHeightForPipe(d){
+    if(d >= HILL.arenaRadius) return 0;
+    if(d <= HILL.capRadius) return HILL.hillHeight;
+    var t = (d - HILL.capRadius) / (HILL.arenaRadius - HILL.capRadius);
+    return HILL.hillHeight * (0.5 + 0.5*Math.cos(t * Math.PI));
+  }
 
   var lockerZoneBounds = {
     minX: LOCKER.roomMinX, maxX: LOCKER.roomMaxX,
@@ -2434,6 +2532,14 @@
   // plateau near the center. Used both for the mesh geometry and so
   // player movement can climb the mound instead of clipping through it.
   function hillGroundHeight(x, z){
+    return hillGroundHeightRaw(x, z) - pipeSocketDip(x, z); // carve a real socket into the slope where the pipe is driven in
+  }
+
+  // the dome's height formula on its own, with no socket carved out — used
+  // both as the base that the socket dip is subtracted from, and by the
+  // socket's own clamp so it can tell how much slope it actually has to
+  // dig into at any given point without needing to recurse into itself
+  function hillGroundHeightRaw(x, z){
     var dx = x - HILL.arenaX, dz = z - HILL.arenaZ;
     var d = Math.sqrt(dx*dx + dz*dz);
     if(d >= HILL.arenaRadius) return 0;
@@ -2442,13 +2548,57 @@
     return HILL.hillHeight * (0.5 + 0.5*Math.cos(t * Math.PI)); // smooth dome falloff, no hard seam at the base
   }
 
+  // A real dug-in socket where the sewer pipe punches into the hillside —
+  // not just a decal on top of the slope, but an actual dent in the
+  // terrain height, so the pipe appears to sit inside a hole bored into
+  // the hill rather than resting on the grass. Falls off smoothly to 0
+  // outside its radius so it blends into the surrounding slope with no
+  // hard seam.
+  // radius has to be generously larger than the hill mesh's own vertex
+  // spacing (~1.6 radial, ~4 arc-length near this part of the slope) or
+  // the dip falls entirely between vertices and never actually deforms
+  // the mesh — this bit the first pass, where the "hole" was invisible
+  var PIPE_SOCKET = { radius: 5.5, depth: 6.5 };
+  function pipeSocketDip(x, z){
+    if(PIPE.mouthX === undefined) return 0; // not resolved yet during early setup
+    var dx = x - PIPE.mouthX, dz = z - PIPE.mouthZ;
+    var d = Math.sqrt(dx*dx + dz*dz);
+    if(d >= PIPE_SOCKET.radius) return 0;
+    var t = d / PIPE_SOCKET.radius; // 0 at socket center, 1 at its rim
+    var shape = 0.5 + 0.5*Math.cos(t * Math.PI); // 1 at center, 0 at rim — smooth bowl profile
+    // Depth limit is a smooth function of d alone. An earlier version
+    // clamped against hillGroundHeightRaw(x,z) directly (a function of
+    // distance to the *hill's* center, not the *pit's* center) — the
+    // switch-over between two differently-centered clamps isn't smooth
+    // across the pit's footprint and tore visible creases into the dense
+    // mesh. Fix: for the exact distance d, find the thinnest terrain
+    // height anywhere on the full circle of that radius around the pit
+    // center (the hill's height varies fastest along the downhill
+    // direction, so the circle's thinnest point moves as d grows). That
+    // per-distance minimum is still purely a function of d, so using it as
+    // the depth ceiling keeps the whole dent one smooth function while
+    // guaranteeing the floor never dips below ground in any direction.
+    var floorCeiling = Infinity;
+    for(var probe=0; probe<16; probe++){
+      var pAng = (probe/16) * Math.PI*2;
+      var px = PIPE.mouthX + Math.cos(pAng) * d;
+      var pz = PIPE.mouthZ + Math.sin(pAng) * d;
+      floorCeiling = Math.min(floorCeiling, hillGroundHeightRaw(px, pz));
+    }
+    var maxAllowedDip = Math.max(floorCeiling - 0.3, 0);
+    return Math.min(shape * PIPE_SOCKET.depth, maxAllowedDip);
+  }
+
   function setupHillArena(){
     // the mound itself: a low-poly dome built by radially extruding
     // hillGroundHeight, so the slope is smooth and the flat summit
     // plateau is clearly walkable ground rather than a floating disc.
     // Segment counts scaled up with the bigger footprint so the silhouette
     // still reads as smoothly curved rather than faceted into big slabs.
-    var radialSegs = 40, ringSegs = 16;
+    // bumped up from 40x16 so the carved-out pipe socket (see
+    // pipeSocketDip) actually has enough vertices inside its radius to
+    // read as a real dent instead of vanishing between sparse verts
+    var radialSegs = 64, ringSegs = 24;
     var geo = new THREE.BufferGeometry();
     var verts = [], indices = [];
     // center point (summit middle)
@@ -2561,6 +2711,955 @@
   }
 
   // ---------------------------------------------------------------------
+  // SEWER PIPE — a big pipe stub sticking out of the ground at the end of
+  // its short branch path. Getting close to the mouth smoothly teleports
+  // the player down into a small decorated sewer room tucked far away
+  // under the map; a matching pipe down there sends them back up.
+  // ---------------------------------------------------------------------
+  var sewerRoomGroup = null; // everything belonging to the sewer pocket, so it can be built once and left alone
+  var pipeMouthWorldPos = new THREE.Vector3(PIPE.mouthX, 0, PIPE.mouthZ);
+  var sewerReturnWorldPos = new THREE.Vector3(PIPE.roomX, 0, PIPE.roomZ + PIPE.roomRadius - 1.6);
+  var inSewer = false; // which "world" the player is currently considered to be in
+  var teleportCooldown = 0; // brief lockout after a teleport so you can't instantly bounce back
+
+  function setupSewerPipe(){
+    // --- pipe set into the hillside ---
+    // The pipe's axis points radially outward from the hill's center (the
+    // direction of PIPE.mouthAngle), and tilts to roughly follow the
+    // slope at that point, so it reads as embedded in the hill rather than
+    // floating on flat ground next to it.
+    var pipeMat = new THREE.MeshStandardMaterial({ color:0x5a7d4a, flatShading:true, roughness:0.75 });
+    var rimMat = new THREE.MeshStandardMaterial({ color:0x3c5533, flatShading:true, roughness:0.8 });
+
+    var outAngle = PIPE.mouthAngle;         // direction from hill center out through the mouth
+    var outX = Math.cos(outAngle), outZ = Math.sin(outAngle); // unit vector, horizontal
+    var slopeTilt = 0.55; // radians the pipe dips downward outward, roughly matching the dome's slope by eye
+
+    var pipeLen = 3.6;
+    var pipeGeo = new THREE.CylinderGeometry(PIPE.mouthRadius, PIPE.mouthRadius, pipeLen, 14, 1, true);
+    var pipe = new THREE.Mesh(pipeGeo, pipeMat);
+    // orient the cylinder (default axis +Y) so it points along the outward
+    // horizontal direction (outX,outZ), tilted down by slopeTilt
+    pipe.rotation.order = 'YXZ';
+    pipe.rotation.y = -outAngle - Math.PI/2;
+    pipe.rotation.x = Math.PI/2 + slopeTilt;
+    // bury the inward end into the hill, leaving the outward end (the open
+    // mouth) proud of the slope, facing away from the hill's center.
+    // Also drop the whole pipe down toward the actual pit floor so it
+    // reads as sitting down inside the dug-out hole. Uses the *real*
+    // (clamped) terrain height at the pit center via hillGroundHeight,
+    // not the raw un-clamped PIPE_SOCKET.depth — using the un-clamped
+    // figure here caused the pipe to sink well below the visible pit
+    // floor (even below world ground level) and vanish from view.
+    var pitFloorY = hillGroundHeight(PIPE.mouthX, PIPE.mouthZ);
+    var pipeSinkY = PIPE.mouthY - pitFloorY - 0.9; // how far down into the pit the pipe's buried end drops, leaving it comfortably above the true floor
+    pipe.position.set(
+      PIPE.mouthX - outX*pipeLen*0.35,
+      PIPE.mouthY - Math.sin(slopeTilt)*pipeLen*0.1 - pipeSinkY,
+      PIPE.mouthZ - outZ*pipeLen*0.35
+    );
+    pipe.castShadow = true;
+    pipe.receiveShadow = true;
+    scene.add(pipe);
+
+    // dark bowl lining the socket that was carved into the slope (see
+    // pipeSocketDip / PIPE_SOCKET) so the dug-out hole reads as an actual
+    // dirt-walled pit around the pipe rather than exposing green grass
+    // inside the dent. Sits centered on the socket, resting right at the
+    // real (clamped) pit floor so it never floats above or sinks below
+    // the terrain mesh's own hole.
+    var socketMat = new THREE.MeshStandardMaterial({ color:0x2a2117, flatShading:true, roughness:1.0, side:THREE.DoubleSide });
+    var socketGeo = new THREE.SphereGeometry(PIPE_SOCKET.radius * 1.05, 16, 8, 0, Math.PI*2, 0, Math.PI/2.1);
+    var socket = new THREE.Mesh(socketGeo, socketMat);
+    socket.rotation.x = Math.PI; // bowl opens upward into the slope
+    socket.position.set(PIPE.mouthX, pitFloorY, PIPE.mouthZ);
+    socket.receiveShadow = true;
+    scene.add(socket);
+
+    // scattered broken dirt/rock chunks around the socket's rim, as if the
+    // hole was dug or punched through rather than a smooth manufactured pit
+    var chunkMat = new THREE.MeshStandardMaterial({ color:0x4a3d2c, flatShading:true, roughness:0.95 });
+    for(var hc=0; hc<8; hc++){
+      var hAng = (hc/8) * Math.PI*2 + Math.random()*0.35;
+      var hR = PIPE_SOCKET.radius * (0.85 + Math.random()*0.3);
+      var chunkGeo = new THREE.DodecahedronGeometry(0.12 + Math.random()*0.12, 0);
+      var chunk = new THREE.Mesh(chunkGeo, chunkMat);
+      var cx = PIPE.mouthX + Math.cos(hAng) * hR;
+      var cz = PIPE.mouthZ + Math.sin(hAng) * hR;
+      chunk.position.set(cx, hillGroundHeight(cx, cz) + 0.05, cz);
+      chunk.rotation.set(Math.random()*Math.PI, Math.random()*Math.PI, Math.random()*Math.PI);
+      chunk.castShadow = true;
+      scene.add(chunk);
+    }
+
+    // mouth-end world position (the actual opening face), used for all the
+    // mouth decorations below and for the trigger-distance check. Sinks
+    // down by the same pipeSinkY as the pipe body so the open end stays
+    // lined up with the now-lower-sitting pipe.
+    var mouthPos = new THREE.Vector3(
+      PIPE.mouthX + outX*pipeLen*0.15,
+      PIPE.mouthY + Math.sin(slopeTilt)*pipeLen*0.15 + PIPE.mouthRadius*0.3 - pipeSinkY,
+      PIPE.mouthZ + outZ*pipeLen*0.15
+    );
+
+    // dark opening disc so the mouth reads as hollow rather than a solid-capped log
+    var openGeo = new THREE.CircleGeometry(PIPE.mouthRadius * 0.86, 16);
+    var openMat = new THREE.MeshBasicMaterial({ color:0x0a0f08 });
+    var opening = new THREE.Mesh(openGeo, openMat);
+    opening.rotation.copy(pipe.rotation);
+    opening.rotateX(Math.PI/2);
+    opening.position.copy(mouthPos);
+    scene.add(opening);
+
+    // rim ring around the mouth
+    var rimGeo = new THREE.TorusGeometry(PIPE.mouthRadius, 0.16, 8, 16);
+    var rim = new THREE.Mesh(rimGeo, rimMat);
+    rim.rotation.copy(pipe.rotation);
+    rim.rotateX(Math.PI/2);
+    rim.position.copy(mouthPos);
+    scene.add(rim);
+
+    // a ring of rivet-like bolts around the rim for a bit of character
+    var mouthUp = new THREE.Vector3(0,1,0);
+    var mouthAxis = new THREE.Vector3(outX, -Math.sin(slopeTilt), outZ).normalize();
+    var mouthRight = new THREE.Vector3().crossVectors(mouthAxis, mouthUp).normalize();
+    var mouthLocalUp = new THREE.Vector3().crossVectors(mouthRight, mouthAxis).normalize();
+    for(var i=0;i<8;i++){
+      var ang = (i/8) * Math.PI * 2;
+      var boltGeo = new THREE.SphereGeometry(0.09, 6, 5);
+      var bolt = new THREE.Mesh(boltGeo, rimMat);
+      bolt.position.set(
+        mouthPos.x + (mouthRight.x*Math.sin(ang) + mouthLocalUp.x*Math.cos(ang)) * PIPE.mouthRadius,
+        mouthPos.y + (mouthRight.y*Math.sin(ang) + mouthLocalUp.y*Math.cos(ang)) * PIPE.mouthRadius,
+        mouthPos.z + (mouthRight.z*Math.sin(ang) + mouthLocalUp.z*Math.cos(ang)) * PIPE.mouthRadius
+      );
+      scene.add(bolt);
+    }
+
+    // faint green glow drifting out of the mouth — cheap ambient light, no
+    // extra geometry cost, just enough to hint "something's down there"
+    var glow = new THREE.PointLight(0x6bff8a, 0.55, 6, 2);
+    glow.position.copy(mouthPos);
+    scene.add(glow);
+
+    // remember the mouth's real world position for the proximity trigger,
+    // now that it's been resolved onto the hill's actual sloped surface
+    PIPE.mouthX = mouthPos.x;
+    PIPE.mouthZ = mouthPos.z;
+
+    buildSewerRoom();
+  }
+
+  // Small tiling canvas texture for the sewer's wet, grimy walls/floor —
+  // same "hand-painted speckle" trick used elsewhere, just in murkier tones.
+  var _sewerTexture = null;
+  function getSewerTexture(){
+    if(_sewerTexture) return _sewerTexture;
+    var size = 128;
+    var canvas = document.createElement('canvas');
+    canvas.width = size; canvas.height = size;
+    var ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#3a4438';
+    ctx.fillRect(0, 0, size, size);
+    for(var i=0;i<180;i++){
+      var x = Math.random()*size, y = Math.random()*size;
+      var r = 0.8 + Math.random()*2.2;
+      ctx.fillStyle = Math.random() < 0.5 ? 'rgba(20,26,20,0.45)' : 'rgba(90,110,80,0.3)';
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI*2);
+      ctx.fill();
+    }
+    // a few streaky "damp" drips running down
+    for(var j=0;j<10;j++){
+      var sx = Math.random()*size;
+      ctx.strokeStyle = 'rgba(15,50,40,0.35)';
+      ctx.lineWidth = 1 + Math.random()*2;
+      ctx.beginPath();
+      ctx.moveTo(sx, 0);
+      ctx.lineTo(sx + (Math.random()*10-5), size*(0.4+Math.random()*0.6));
+      ctx.stroke();
+    }
+    var tex = new THREE.CanvasTexture(canvas);
+    tex.wrapS = THREE.RepeatWrapping;
+    tex.wrapT = THREE.RepeatWrapping;
+    _sewerTexture = tex;
+    return tex;
+  }
+
+  // ---------------------------------------------------------------------
+  // SEWER RESIDENT — a low-poly "official in a suit" character, ported
+  // from a standalone reference model into a single static group using
+  // this game's plain (non-module) three.js build. Built once and cached,
+  // since it's purely decorative (no animation, no collision).
+  // ---------------------------------------------------------------------
+  var _friendMaterials = null;
+  function getFriendMaterials(){
+    if(_friendMaterials) return _friendMaterials;
+    _friendMaterials = {
+      suit: new THREE.MeshStandardMaterial({ color:0x111b35, roughness:0.82, metalness:0.02, flatShading:true }),
+      suitLight: new THREE.MeshStandardMaterial({ color:0x172443, roughness:0.84, flatShading:true }),
+      suitDark: new THREE.MeshStandardMaterial({ color:0x0b1227, roughness:0.88, flatShading:true }),
+      shirt: new THREE.MeshStandardMaterial({ color:0xe6e3da, roughness:0.9, flatShading:true }),
+      skin: new THREE.MeshStandardMaterial({ color:0xd88d68, roughness:0.9, flatShading:true }),
+      skinLight: new THREE.MeshStandardMaterial({ color:0xf0ae86, roughness:0.9, flatShading:true }),
+      hair: new THREE.MeshStandardMaterial({ color:0x080b11, roughness:0.88, flatShading:true }),
+      shoe: new THREE.MeshStandardMaterial({ color:0x080a0e, roughness:0.9, flatShading:true }),
+      redBadge: new THREE.MeshStandardMaterial({ color:0xc82920, roughness:0.7, flatShading:true }),
+      gold: new THREE.MeshStandardMaterial({ color:0xd3a84d, roughness:0.5, metalness:0.25, flatShading:true }),
+      eye: new THREE.MeshStandardMaterial({ color:0x151515, roughness:0.5, flatShading:true })
+    };
+    return _friendMaterials;
+  }
+
+  function friendAddBox(parent, size, position, material, rotation){
+    rotation = rotation || [0,0,0];
+    var geo = new THREE.BoxGeometry(size[0], size[1], size[2], 2, 2, 2);
+    var mesh = new THREE.Mesh(geo, material);
+    mesh.position.set(position[0], position[1], position[2]);
+    mesh.rotation.set(rotation[0], rotation[1], rotation[2]);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    parent.add(mesh);
+    return mesh;
+  }
+  function friendAddCylinder(parent, rTop, rBottom, height, position, material, segments, rotation){
+    segments = segments || 8;
+    rotation = rotation || [0,0,0];
+    var geo = new THREE.CylinderGeometry(rTop, rBottom, height, segments, 1);
+    var mesh = new THREE.Mesh(geo, material);
+    mesh.position.set(position[0], position[1], position[2]);
+    mesh.rotation.set(rotation[0], rotation[1], rotation[2]);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    parent.add(mesh);
+    return mesh;
+  }
+  function friendAddSphere(parent, radius, position, material, wSeg, hSeg, scale){
+    wSeg = wSeg || 8; hSeg = hSeg || 6; scale = scale || [1,1,1];
+    var geo = new THREE.SphereGeometry(radius, wSeg, hSeg);
+    var mesh = new THREE.Mesh(geo, material);
+    mesh.position.set(position[0], position[1], position[2]);
+    mesh.scale.set(scale[0], scale[1], scale[2]);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    parent.add(mesh);
+    return mesh;
+  }
+
+  // ---------------------------------------------------------------------
+  // FISHING ROD — ported from a standalone reference model down into a
+  // single static low-poly group (no live physics/animation, since this
+  // NPC is purely decorative). Kept small enough to fit naturally in the
+  // character's hand at the game's own scale.
+  // ---------------------------------------------------------------------
+  var _rodMaterials = null;
+  function getFishingRodMaterials(){
+    if(_rodMaterials) return _rodMaterials;
+    _rodMaterials = {
+      cork: new THREE.MeshStandardMaterial({ color:0xc8965d, roughness:0.85, flatShading:true }),
+      carbon: new THREE.MeshStandardMaterial({ color:0x18181c, roughness:0.4, metalness:0.4, flatShading:true }),
+      chrome: new THREE.MeshStandardMaterial({ color:0xdfe6ea, roughness:0.25, metalness:0.7, flatShading:true }),
+      gold: new THREE.MeshStandardMaterial({ color:0xf59e0b, roughness:0.35, metalness:0.6, flatShading:true }),
+      blackPlastic: new THREE.MeshStandardMaterial({ color:0x111115, roughness:0.55, flatShading:true }),
+      line: new THREE.MeshBasicMaterial({ color:0x7dd3fc, transparent:true, opacity:0.75 }),
+      floatRed: new THREE.MeshStandardMaterial({ color:0xef4444, roughness:0.35, flatShading:true }),
+      floatWhite: new THREE.MeshStandardMaterial({ color:0xf8fafc, roughness:0.35, flatShading:true })
+    };
+    return _rodMaterials;
+  }
+
+  function buildFishingRod(){
+    var m = getFishingRodMaterials();
+    var rod = new THREE.Group();
+    // built along +Y like the reference (handle at the bottom, tip up),
+    // then scaled down; the parent applies its own rotation/position to
+    // set the grip and forward lean once attached to the hand
+    var inner = new THREE.Group();
+    rod.add(inner);
+    inner.scale.set(0.62, 0.62, 0.62);
+
+    // handle: lower cork grip, butt cap, reel seat, upper cork grip
+    friendAddCylinder(inner, 0.07, 0.075, 0.9, [0,0.45,0], m.cork, 12);
+    friendAddCylinder(inner, 0.08, 0.07, 0.08, [0,0.04,0], m.chrome, 12);
+    friendAddCylinder(inner, 0.065, 0.065, 0.5, [0,1.15,0], m.blackPlastic, 12);
+    friendAddCylinder(inner, 0.072, 0.072, 0.05, [0,0.95,0], m.chrome, 12);
+    friendAddCylinder(inner, 0.072, 0.072, 0.05, [0,1.35,0], m.chrome, 12);
+    friendAddCylinder(inner, 0.065, 0.07, 0.3, [0,1.55,0], m.cork, 12);
+
+    // spinning reel, hanging just below the handle
+    var reel = new THREE.Group();
+    reel.position.set(0, 1.15, 0.08);
+    inner.add(reel);
+    friendAddBox(reel, [0.03,0.25,0.08], [0,-0.1,0.08], m.blackPlastic, [-0.3,0,0]);
+    friendAddSphere(reel, 0.12, [0,-0.2,0.18], m.blackPlastic, 10, 8, [0.8,1,1.2]);
+    friendAddCylinder(reel, 0.11, 0.1, 0.2, [0,-0.2,0.32], m.gold, 16, [Math.PI/2,0,0]);
+    friendAddCylinder(reel, 0.105, 0.105, 0.14, [0,-0.2,0.32], m.line, 14, [Math.PI/2,0,0]);
+    friendAddBox(reel, [0.2,0.03,0.04], [0.22,-0.2,0.18], m.chrome);
+    friendAddCylinder(reel, 0.035, 0.035, 0.08, [0.32,-0.2,0.23], m.blackPlastic, 10, [Math.PI/2,0,0]);
+
+    // tapered carbon blank, straight (no live-physics bend) running up
+    // from the reel seat to the tip
+    var rodLen = 4.5;
+    friendAddCylinder(inner, 0.05, 0.012, rodLen, [0,1.7+rodLen/2,0.05], m.carbon, 10);
+
+    // a handful of line guides spaced up the blank, shrinking toward the tip
+    var guideRatios = [0.12, 0.32, 0.55, 0.78, 0.98];
+    guideRatios.forEach(function(ratio){
+      var y = 1.7 + rodLen*ratio;
+      var ringR = 0.075 * (1 - ratio*0.7);
+      friendAddCylinder(inner, ringR, ringR, 0.012, [0,y,0.05+ratio*0.12], m.chrome, 12, [Math.PI/2,0,0]);
+    });
+
+    // line running from the tip out and down to a caught fish dangling on
+    // the hook — a placeholder cast built pointing forward-and-down; its
+    // real end point gets recomputed by dropLineIntoWater() once the
+    // character is actually placed in the room, so the fish lands exactly
+    // on the water instead of wherever this initial guess points
+    var tipY = 1.7 + rodLen;
+    var tipLocalPos = new THREE.Vector3(0, tipY, 0.17);
+    var lineLen = 3.4;
+    var fishPos = [0.15, tipY - lineLen*0.8, -1.2];
+    var lineMidGeo = new THREE.CatmullRomCurve3([
+      tipLocalPos.clone(),
+      new THREE.Vector3(fishPos[0]*0.5, tipY - lineLen*0.35, fishPos[2]*0.5),
+      new THREE.Vector3(fishPos[0], fishPos[1]+0.3, fishPos[2])
+    ]);
+    var lineTube = new THREE.TubeGeometry(lineMidGeo, 12, 0.008, 5, false);
+    var lineMesh = new THREE.Mesh(lineTube, m.line);
+    lineMesh.userData.isFishingLine = true;
+    lineMesh.userData.tipLocalPos = tipLocalPos; // where the line starts, in the rod's own local space
+    lineMesh.userData.lineMaterial = m.line;
+    inner.add(lineMesh);
+
+    // a small caught fish, hooked through the mouth and hanging tail-down
+    var fishMat = new THREE.MeshStandardMaterial({ color:0x7fb8c9, roughness:0.55, flatShading:true });
+    var fishBellyMat = new THREE.MeshStandardMaterial({ color:0xe8e4d0, roughness:0.6, flatShading:true });
+    var fishFinMat = new THREE.MeshStandardMaterial({ color:0x5c93a8, roughness:0.6, flatShading:true });
+    var fishEyeMat = new THREE.MeshStandardMaterial({ color:0x101010, roughness:0.4, flatShading:true });
+
+    var fishGroup = new THREE.Group();
+    fishGroup.position.set(fishPos[0], fishPos[1], fishPos[2]);
+    fishGroup.rotation.z = Math.PI; // hangs head-up, body drooping down from the hook
+    fishGroup.rotation.y = 0.4 + 270 * Math.PI / 180;
+    fishGroup.userData.isCaughtFish = true;
+    inner.add(fishGroup);
+
+    // body: tapered, slightly flattened sphere
+    friendAddSphere(fishGroup, 0.22, [0,0,0], fishMat, 10, 8, [1.0, 0.62, 0.62]);
+    friendAddSphere(fishGroup, 0.16, [0,-0.10,0.10], fishBellyMat, 8, 6, [0.85,0.55,0.6]);
+    // tail fin, fanned out at the "bottom" (away from the hook)
+    friendAddBox(fishGroup, [0.02,0.26,0.30], [0,-0.34,0], fishFinMat, [0.15,0,0]);
+    // dorsal + side fins
+    friendAddBox(fishGroup, [0.02,0.16,0.14], [0,0.05,-0.20], fishFinMat, [0,0,0]);
+    friendAddBox(fishGroup, [0.14,0.02,0.12], [-0.20,-0.02,0.02], fishFinMat, [0,0,0.1]);
+    friendAddBox(fishGroup, [0.14,0.02,0.12], [0.20,-0.02,0.02], fishFinMat, [0,0,-0.1]);
+    // eyes near the top (hook end)
+    friendAddSphere(fishGroup, 0.045, [-0.10,0.15,0.16], fishEyeMat, 6, 5);
+    friendAddSphere(fishGroup, 0.045, [0.10,0.15,0.16], fishEyeMat, 6, 5);
+    // mouth, right where the hook goes in
+    friendAddBox(fishGroup, [0.10,0.03,0.03], [0,0.22,0.19], fishEyeMat);
+
+    return rod;
+  }
+
+  // Rotates a character's fishing rod (found via userData.isFishingRod)
+  // around its own vertical axis so the line/fish at its tip actually
+  // points at a given world-space target (the water), regardless of how
+  // the character's body/arm happen to be posed. Computed once from real
+  // world transforms rather than guessed by eye.
+  // Rewinds the fishing line + dangling fish so the fish actually ends up
+  // at a specific world-space point (the water's surface) rather than at
+  // the fixed offset it was originally built with — which only happened
+  // to line up for one particular arm/body pose. Converts the world target
+  // into the rod's own local space and regenerates the line curve there.
+  function dropLineIntoWater(characterRoot, waterWorldPos){
+    characterRoot.updateMatrixWorld(true);
+    var rod = null, lineMesh = null, fishGroup = null, inner = null;
+    characterRoot.traverse(function(obj){
+      if(obj.userData && obj.userData.isFishingRod) rod = obj;
+      if(obj.userData && obj.userData.isFishingLine) lineMesh = obj;
+      if(obj.userData && obj.userData.isCaughtFish) fishGroup = obj;
+    });
+    if(!rod || !lineMesh || !fishGroup) return;
+    inner = lineMesh.parent; // the scaled local group both line and fish live in
+
+    // convert the world-space water point into inner's local space
+    var localTarget = inner.worldToLocal(waterWorldPos.clone());
+
+    var tipLocalPos = lineMesh.userData.tipLocalPos;
+    var midPoint = new THREE.Vector3().addVectors(tipLocalPos, localTarget).multiplyScalar(0.5);
+    midPoint.y -= 0.5; // a bit of natural sag in the line
+
+    var newCurve = new THREE.CatmullRomCurve3([
+      tipLocalPos.clone(),
+      midPoint,
+      localTarget.clone()
+    ]);
+    lineMesh.geometry.dispose();
+    lineMesh.geometry = new THREE.TubeGeometry(newCurve, 12, 0.008, 5, false);
+
+    fishGroup.position.copy(localTarget);
+  }
+
+  function aimRodAtWater(characterRoot, waterWorldPos){
+    characterRoot.updateMatrixWorld(true);
+    var rod = null;
+    characterRoot.traverse(function(obj){
+      if(obj.userData && obj.userData.isFishingRod) rod = obj;
+    });
+    if(!rod) return;
+
+    var rodWorldPos = new THREE.Vector3();
+    rod.getWorldPosition(rodWorldPos);
+
+    // horizontal direction from the rod's grip to the water, in world space
+    var toWaterX = waterWorldPos.x - rodWorldPos.x;
+    var toWaterZ = waterWorldPos.z - rodWorldPos.z;
+    var targetWorldYaw = Math.atan2(toWaterX, toWaterZ);
+
+    // the rod's current forward direction in world space (its local -Z,
+    // which is where the line/fish were built pointing)
+    var currentDir = new THREE.Vector3(0, 0, -1);
+    currentDir.applyQuaternion(rod.getWorldQuaternion(new THREE.Quaternion()));
+    var currentWorldYaw = Math.atan2(currentDir.x, currentDir.z);
+
+    // rotate the rod (in its own local frame) by exactly the difference,
+    // so its tip ends up aimed at the water no matter what parent
+    // rotations (arm, body) came before it
+    rod.rotation.y += (targetWorldYaw - currentWorldYaw);
+  }
+
+  // Same idea, but aims the rod at an exact world-space yaw (degrees, same
+  // convention as the on-screen coords HUD: 0° = +Z, measured via
+  // atan2(x,z)) instead of at a specific point — for precise "make it
+  // point at heading N" adjustments.
+  function aimRodAtWorldYaw(characterRoot, targetYawDeg){
+    characterRoot.updateMatrixWorld(true);
+    var rod = null;
+    characterRoot.traverse(function(obj){
+      if(obj.userData && obj.userData.isFishingRod) rod = obj;
+    });
+    if(!rod) return;
+
+    var targetWorldYaw = targetYawDeg * Math.PI / 180;
+
+    var currentDir = new THREE.Vector3(0, 0, -1);
+    currentDir.applyQuaternion(rod.getWorldQuaternion(new THREE.Quaternion()));
+    var currentWorldYaw = Math.atan2(currentDir.x, currentDir.z);
+
+    rod.rotation.y += (targetWorldYaw - currentWorldYaw);
+  }
+
+  // ---------------------------------------------------------------------
+  // "NUCLEAR" BUTTON PROP — ported from a standalone reference model,
+  // purely decorative (no functionality, just sits there looking ominous
+  // next to the sewer's fisherman). The warning-label texture is left
+  // blank rather than reading "DANGER: NUCLEAR LAUNCH", since it's just
+  // set dressing rather than an actual button anyone can press.
+  // ---------------------------------------------------------------------
+  var _nukeButtonMaterials = null;
+  function getNukeButtonMaterials(){
+    if(_nukeButtonMaterials) return _nukeButtonMaterials;
+
+    var hazardCanvas = document.createElement('canvas');
+    hazardCanvas.width = 128; hazardCanvas.height = 128;
+    var hctx = hazardCanvas.getContext('2d');
+    hctx.fillStyle = '#e67e22';
+    hctx.fillRect(0, 0, 128, 128);
+    hctx.fillStyle = '#111111';
+    var stripeWidth = 16;
+    for(var i=-128; i<256; i+=stripeWidth*2){
+      hctx.beginPath();
+      hctx.moveTo(i, 0);
+      hctx.lineTo(i+stripeWidth, 0);
+      hctx.lineTo(i+stripeWidth-128, 128);
+      hctx.lineTo(i-128, 128);
+      hctx.closePath();
+      hctx.fill();
+    }
+    var hazardTex = new THREE.CanvasTexture(hazardCanvas);
+    hazardTex.wrapS = THREE.RepeatWrapping;
+    hazardTex.wrapT = THREE.RepeatWrapping;
+
+    // blank warning-plate texture: just the dark panel + red border, no
+    // launch-related text
+    var labelCanvas = document.createElement('canvas');
+    labelCanvas.width = 256; labelCanvas.height = 64;
+    var lctx = labelCanvas.getContext('2d');
+    lctx.fillStyle = '#1c1d22';
+    lctx.fillRect(0, 0, 256, 64);
+    lctx.strokeStyle = '#d63031';
+    lctx.lineWidth = 5;
+    lctx.strokeRect(6, 6, 244, 52);
+    var labelTex = new THREE.CanvasTexture(labelCanvas);
+
+    _nukeButtonMaterials = {
+      darkMetal: new THREE.MeshStandardMaterial({ color:0x1f2024, metalness:0.7, roughness:0.35, flatShading:true }),
+      chrome: new THREE.MeshStandardMaterial({ color:0xcccccc, metalness:0.85, roughness:0.2, flatShading:true }),
+      hazard: new THREE.MeshStandardMaterial({ map:hazardTex, roughness:0.5, flatShading:true }),
+      redButton: new THREE.MeshStandardMaterial({ color:0xcc0000, emissive:0x330000, roughness:0.25, metalness:0.15, flatShading:true }),
+      label: new THREE.MeshStandardMaterial({ map:labelTex, roughness:0.4, metalness:0.3 })
+    };
+    return _nukeButtonMaterials;
+  }
+
+  function buildNukeButton(){
+    var m = getNukeButtonMaterials();
+    var group = new THREE.Group();
+
+    // heavy metal base
+    var base = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.35, 1.1), m.darkMetal);
+    base.position.y = 0.175;
+    base.castShadow = true;
+    base.receiveShadow = true;
+    group.add(base);
+
+    // corner bolts
+    var boltGeo = new THREE.CylinderGeometry(0.028, 0.028, 0.02, 10);
+    var boltPositions = [[-0.46,0.358,-0.46],[0.46,0.358,-0.46],[-0.46,0.358,0.46],[0.46,0.358,0.46]];
+    boltPositions.forEach(function(pos){
+      var bolt = new THREE.Mesh(boltGeo, m.chrome);
+      bolt.position.set(pos[0], pos[1], pos[2]);
+      group.add(bolt);
+    });
+
+    // blank warning plate on the front face
+    var label = new THREE.Mesh(new THREE.PlaneGeometry(0.68, 0.17), m.label);
+    label.position.set(0, 0.175, 0.556);
+    group.add(label);
+
+    // yellow/black hazard ring
+    var hazardRing = new THREE.Mesh(new THREE.CylinderGeometry(0.43, 0.46, 0.03, 24), m.hazard);
+    hazardRing.position.y = 0.365;
+    group.add(hazardRing);
+
+    // chrome guard ring around the button
+    var guardRing = new THREE.Mesh(new THREE.TorusGeometry(0.35, 0.037, 12, 32), m.chrome);
+    guardRing.rotation.x = Math.PI/2;
+    guardRing.position.y = 0.40;
+    group.add(guardRing);
+
+    // recessed socket the button sits in
+    var socket = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.32, 0.09, 24), m.darkMetal);
+    socket.position.y = 0.40;
+    group.add(socket);
+
+    // the red button itself: cylinder body + domed top
+    var buttonBase = new THREE.Mesh(new THREE.CylinderGeometry(0.27, 0.27, 0.18, 24), m.redButton);
+    buttonBase.position.y = 0.475;
+    buttonBase.castShadow = true;
+    group.add(buttonBase);
+
+    var buttonTop = new THREE.Mesh(new THREE.SphereGeometry(0.27, 20, 10, 0, Math.PI*2, 0, Math.PI*0.3), m.redButton);
+    buttonTop.position.y = 0.545;
+    buttonTop.scale.set(1, 0.35, 1);
+    buttonTop.castShadow = true;
+    group.add(buttonTop);
+
+    // faint red glow, matching the reference's PointLight but kept cheap
+    var glow = new THREE.PointLight(0xff0000, 0.5, 2, 2);
+    glow.position.set(0, 0.7, 0);
+    group.add(glow);
+
+    return group;
+  }
+
+  function buildFriendCharacter(){
+    var m = getFriendMaterials();
+    // the reference model was built at roughly human-official scale (head
+    // near y=5.15); wrapped in an outer group scaled down to match this
+    // game's own character sizing (~1.8 units tall) rather than towering
+    // over the player. Posed sitting down fishing: legs rotated 180°
+    // at the hip (bent forward and down, dangling off an edge) instead of
+    // standing straight, and the arms angled forward holding a fishing rod.
+    var outer = new THREE.Group();
+    var character = new THREE.Group();
+    outer.add(character);
+    outer.scale.set(0.36, 0.36, 0.36);
+
+    // seated hips: the whole lower body sits lower and the legs hang bent
+    // forward at roughly a right angle, as if perched on the sewer's edge
+    var hipY = 1.55;   // seat height, lower than the standing 1.05-based rig
+    var legGroupL = new THREE.Group();
+    legGroupL.position.set(-0.47, hipY, 0);
+    legGroupL.rotation.x = Math.PI; // flipped 180° at the hip, forward-and-down
+    character.add(legGroupL);
+    friendAddBox(legGroupL, [0.72,1.85,0.78], [0,0.92,0], m.suitDark);
+    friendAddBox(legGroupL, [0.88,0.35,1.25], [0,1.80,-0.58], m.shoe);
+
+    var legGroupR = new THREE.Group();
+    legGroupR.position.set(0.47, hipY, 0);
+    legGroupR.rotation.x = Math.PI;
+    character.add(legGroupR);
+    friendAddBox(legGroupR, [0.72,1.85,0.78], [0,0.92,0], m.suitDark);
+    friendAddBox(legGroupR, [0.88,0.35,1.25], [0,1.80,-0.58], m.shoe);
+
+    // body / jacket, lowered to sit on top of the bent legs
+    var bodyY = hipY + 1.20;
+    friendAddBox(character, [2.65,2.75,1.42], [0,bodyY,0], m.suit);
+    friendAddBox(character, [2.48,0.65,1.48], [0,bodyY-0.83,0], m.suitLight);
+    // shoulders
+    friendAddSphere(character, 0.75, [-1.22,bodyY+0.80,0], m.suitLight, 8, 5, [0.85,0.8,1.0]);
+    friendAddSphere(character, 0.75, [1.22,bodyY+0.80,0], m.suitLight, 8, 5, [0.85,0.8,1.0]);
+    // collar / shirt
+    friendAddBox(character, [0.65,0.62,0.18], [0,bodyY+1.27,-0.72], m.shirt);
+    friendAddBox(character, [0.72,0.48,0.18], [-0.36,bodyY+1.13,-0.69], m.suitLight, [0,0,-0.32]);
+    friendAddBox(character, [0.72,0.48,0.18], [0.36,bodyY+1.13,-0.69], m.suitLight, [0,0,0.32]);
+    // lapels
+    friendAddBox(character, [0.42,1.65,0.16], [-0.38,bodyY+0.43,-0.74], m.suitLight, [0,0,-0.06]);
+    friendAddBox(character, [0.42,1.65,0.16], [0.38,bodyY+0.43,-0.74], m.suitLight, [0,0,0.06]);
+    // chest pockets
+    friendAddBox(character, [0.68,0.42,0.15], [-0.76,bodyY+0.57,-0.76], m.suitDark);
+    friendAddBox(character, [0.68,0.42,0.15], [0.76,bodyY+0.57,-0.76], m.suitDark);
+    // lower pockets
+    friendAddBox(character, [0.72,0.52,0.16], [-0.75,bodyY-0.40,-0.76], m.suitDark);
+    friendAddBox(character, [0.72,0.52,0.16], [0.75,bodyY-0.40,-0.76], m.suitDark);
+    // buttons
+    for(var i=0;i<4;i++){
+      friendAddCylinder(character, 0.065, 0.065, 0.055, [0, bodyY+0.70 - i*0.38, -0.82], m.gold, 8, [Math.PI/2,0,0]);
+    }
+
+    // left arm — reaches forward and down, hands resting on/holding the rod
+    var leftArm = new THREE.Group();
+    leftArm.position.set(-1.42, bodyY+0.60, 0);
+    leftArm.rotation.x = 0.95;
+    leftArm.rotation.z = -0.18;
+    character.add(leftArm);
+    friendAddCylinder(leftArm, 0.34, 0.43, 1.72, [0,-0.72,0], m.suitLight, 7);
+    friendAddCylinder(leftArm, 0.31, 0.31, 0.22, [0,-1.59,0], m.shirt, 8);
+    friendAddSphere(leftArm, 0.31, [0,-1.89,0], m.skinLight, 7, 5, [0.82,1.0,0.82]);
+
+    // right arm — same forward reach, slightly higher grip on the rod
+    var rightArm = new THREE.Group();
+    rightArm.position.set(1.42, bodyY+0.60, 0);
+    rightArm.rotation.x = 0.75;
+    rightArm.rotation.z = 0.18;
+    character.add(rightArm);
+    friendAddCylinder(rightArm, 0.34, 0.43, 1.72, [0,-0.72,0], m.suitLight, 7);
+    friendAddCylinder(rightArm, 0.31, 0.31, 0.22, [0,-1.59,0], m.shirt, 8);
+    friendAddSphere(rightArm, 0.31, [0,-1.89,0], m.skinLight, 7, 5, [0.82,1.0,0.82]);
+
+    // fishing rod, gripped right in the hand — attached as a child of the
+    // right arm so it moves with it, anchored at the hand's local position
+    var rod = buildFishingRod();
+    rod.userData.isFishingRod = true;
+    rod.position.set(0, -1.89, 0);       // same spot as the hand sphere above
+    rod.rotation.set(-0.55, 0.05, -1.15); // angled forward, out over the water the character is facing
+    rightArm.add(rod);
+
+    // head, tilted slightly down as if watching the water
+    var head = new THREE.Group();
+    head.position.set(0, bodyY+2.0, 0);
+    head.rotation.x = 0.22 - 0.18 - 0.15; // tilted down a bit more
+    head.rotation.y = -15 * Math.PI / 180; // turned 15° the other way
+    character.add(head);
+    friendAddCylinder(head, 0.40, 0.47, 0.58, [0,-0.65,0], m.skin, 8);
+    friendAddSphere(head, 0.88, [0,0,0], m.skinLight, 8, 6, [0.88,1.05,0.84]);
+    // ears
+    friendAddSphere(head, 0.18, [-0.83,-0.02,0], m.skin, 6, 4, [0.7,1.15,0.75]);
+    friendAddSphere(head, 0.18, [0.83,-0.02,0], m.skin, 6, 4, [0.7,1.15,0.75]);
+    // hair
+    friendAddBox(head, [1.52,0.58,1.30], [0,0.65,0], m.hair);
+    friendAddBox(head, [1.48,0.42,0.32], [0,0.42,-0.63], m.hair, [-0.08,0,0]);
+    friendAddBox(head, [0.22,0.62,1.0], [-0.70,0.38,0], m.hair);
+    friendAddBox(head, [0.22,0.62,1.0], [0.70,0.38,0], m.hair);
+    // face
+    friendAddCylinder(head, 0.10, 0.15, 0.30, [0,-0.05,-0.83], m.skin, 6, [Math.PI/2,0,0]);
+    friendAddSphere(head, 0.27, [-0.40,-0.12,-0.69], m.skinLight, 7, 5, [1.0,0.85,0.55]);
+    friendAddSphere(head, 0.27, [0.40,-0.12,-0.69], m.skinLight, 7, 5, [1.0,0.85,0.55]);
+    friendAddSphere(head, 0.075, [-0.31,0.12,-0.78], m.eye, 6, 4);
+    friendAddSphere(head, 0.075, [0.31,0.12,-0.78], m.eye, 6, 4);
+    friendAddBox(head, [0.38,0.07,0.08], [-0.31,0.30,-0.77], m.hair, [0,0,-0.06]);
+    friendAddBox(head, [0.38,0.07,0.08], [0.31,0.30,-0.77], m.hair, [0,0,0.06]);
+    friendAddSphere(head, 0.25, [0,-0.43,-0.68], m.skin, 7, 5, [1.15,0.7,0.65]);
+
+    // red badge
+    friendAddBox(character, [0.32,0.24,0.055], [0.77,bodyY+0.57,-0.87], m.redBadge);
+    friendAddBox(character, [0.08,0.10,0.02], [0.77,bodyY+0.57,-0.905], m.gold);
+
+    return outer;
+  }
+
+  function buildSewerRoom(){
+    sewerRoomGroup = new THREE.Group();
+    sewerRoomGroup.position.set(PIPE.roomX, 0, PIPE.roomZ);
+    scene.add(sewerRoomGroup);
+
+    var tex = getSewerTexture();
+
+    // circular floor, slick and dark
+    var floorTex = tex.clone(); floorTex.needsUpdate = true;
+    floorTex.repeat.set(4, 4);
+    var floorGeo = new THREE.CircleGeometry(PIPE.roomRadius, 24);
+    floorGeo.rotateX(-Math.PI/2);
+    var floorMat = new THREE.MeshStandardMaterial({ color:0x4a5a46, flatShading:true, roughness:0.6, metalness:0.1, map: floorTex });
+    var floor = new THREE.Mesh(floorGeo, floorMat);
+    floor.receiveShadow = true;
+    sewerRoomGroup.add(floor);
+
+    // a shallow ring of murky water in the middle of the floor for atmosphere
+    var waterGeo = new THREE.CircleGeometry(PIPE.roomRadius*0.42, 20);
+    waterGeo.rotateX(-Math.PI/2);
+    var waterMat = new THREE.MeshStandardMaterial({ color:0x2a4a42, roughness:0.15, metalness:0.4, transparent:true, opacity:0.85 });
+    var water = new THREE.Mesh(waterGeo, waterMat);
+    water.position.y = 0.02;
+    sewerRoomGroup.add(water);
+
+    // cylindrical brick wall around the room
+    var wallTex = tex.clone(); wallTex.needsUpdate = true;
+    wallTex.repeat.set(10, 2);
+    var wallGeo = new THREE.CylinderGeometry(PIPE.roomRadius, PIPE.roomRadius, PIPE.roomHeight, 24, 1, true);
+    var wallMat = new THREE.MeshStandardMaterial({ color:0x556552, flatShading:true, roughness:0.85, map: wallTex, side:THREE.BackSide });
+    var wall = new THREE.Mesh(wallGeo, wallMat);
+    wall.position.y = PIPE.roomHeight/2;
+    wall.receiveShadow = true;
+    sewerRoomGroup.add(wall);
+
+    // domed ceiling, like a big culvert
+    var ceilGeo = new THREE.SphereGeometry(PIPE.roomRadius, 20, 10, 0, Math.PI*2, 0, Math.PI/2.2);
+    var ceilMat = new THREE.MeshStandardMaterial({ color:0x333d31, flatShading:true, roughness:0.9, side:THREE.BackSide });
+    var ceiling = new THREE.Mesh(ceilGeo, ceilMat);
+    ceiling.position.y = PIPE.roomHeight;
+    sewerRoomGroup.add(ceiling);
+
+    // moody green-tinted lighting so it reads as a distinct, murkier space
+    var sewerAmbient = new THREE.AmbientLight(0x3a5a3a, 0.55);
+    sewerRoomGroup.add(sewerAmbient);
+    var sewerGlow = new THREE.PointLight(0x7dffa0, 1.1, PIPE.roomRadius*2.2, 2);
+    sewerGlow.position.set(0, PIPE.roomHeight*0.75, 0);
+    sewerRoomGroup.add(sewerGlow);
+    // second dimmer light near the return pipe so it doesn't sit in total shadow
+    var sewerGlow2 = new THREE.PointLight(0x6bff8a, 0.6, 8, 2);
+    sewerGlow2.position.set(0, 2, PIPE.roomRadius - 2);
+    sewerRoomGroup.add(sewerGlow2);
+
+    // a handful of decorative pipes running along the walls at various
+    // heights/angles, giving the space some industrial sewer character
+    var decoPipeMat = new THREE.MeshStandardMaterial({ color:0x6b7d68, flatShading:true, roughness:0.7, metalness:0.3 });
+    var pipeCount = 6;
+    for(var i=0;i<pipeCount;i++){
+      var ang = (i/pipeCount) * Math.PI*2 + 0.3;
+      var px = Math.cos(ang) * (PIPE.roomRadius - 0.6);
+      var pz = Math.sin(ang) * (PIPE.roomRadius - 0.6);
+      var h = 1.0 + Math.random()*2.2;
+      var pGeo = new THREE.CylinderGeometry(0.22, 0.22, PIPE.roomHeight*0.9, 8);
+      var pMesh = new THREE.Mesh(pGeo, decoPipeMat);
+      pMesh.position.set(px, PIPE.roomHeight*0.45, pz);
+      sewerRoomGroup.add(pMesh);
+      // little valve wheel partway up each pipe
+      var valveGeo = new THREE.TorusGeometry(0.16, 0.04, 6, 10);
+      var valve = new THREE.Mesh(valveGeo, new THREE.MeshStandardMaterial({ color:0xd8c24a, flatShading:true, roughness:0.5, metalness:0.4 }));
+      valve.position.set(px, h, pz);
+      valve.rotation.x = Math.PI/2;
+      sewerRoomGroup.add(valve);
+    }
+
+    // occasional glowing mushroom/fungus clusters on the floor near the
+    // walls — small, cheap, and gives the room a slightly whimsical touch
+    // rather than being purely grim
+    var fungusColors = [0x8fe86b, 0xffd25a, 0x7bd8ff];
+    for(var f=0; f<9; f++){
+      var fang = Math.random()*Math.PI*2;
+      var fr = PIPE.roomRadius*0.55 + Math.random()*PIPE.roomRadius*0.35;
+      var fx = Math.cos(fang)*fr, fz = Math.sin(fang)*fr;
+      var capColor = fungusColors[f % fungusColors.length];
+      var stemGeo = new THREE.CylinderGeometry(0.04, 0.05, 0.22, 5);
+      var stemMat = new THREE.MeshStandardMaterial({ color:0xe8e0c8, flatShading:true, roughness:0.8 });
+      var stem = new THREE.Mesh(stemGeo, stemMat);
+      stem.position.set(fx, 0.11, fz);
+      sewerRoomGroup.add(stem);
+      var capGeo = new THREE.SphereGeometry(0.12, 7, 5, 0, Math.PI*2, 0, Math.PI/1.8);
+      var capMat = new THREE.MeshStandardMaterial({ color:capColor, flatShading:true, roughness:0.5, emissive:capColor, emissiveIntensity:0.35 });
+      var cap = new THREE.Mesh(capGeo, capMat);
+      cap.position.set(fx, 0.22, fz);
+      sewerRoomGroup.add(cap);
+    }
+
+    // scattered floating particle motes for a bit of extra atmosphere
+    var moteGeo = new THREE.BufferGeometry();
+    var moteCount = 40;
+    var motePositions = new Float32Array(moteCount*3);
+    for(var m=0;m<moteCount;m++){
+      var mang = Math.random()*Math.PI*2;
+      var mr = Math.random()*PIPE.roomRadius*0.9;
+      motePositions[m*3] = Math.cos(mang)*mr;
+      motePositions[m*3+1] = Math.random()*PIPE.roomHeight;
+      motePositions[m*3+2] = Math.sin(mang)*mr;
+    }
+    moteGeo.setAttribute('position', new THREE.BufferAttribute(motePositions, 3));
+    var moteMat = new THREE.PointsMaterial({ color:0xbfffcf, size:0.05, transparent:true, opacity:0.6 });
+    var motes = new THREE.Points(moteGeo, moteMat);
+    sewerRoomGroup.add(motes);
+
+    // a resident NPC sitting at the water's edge, off to one side so it
+    // doesn't block either pipe's approach
+    var friend = buildFriendCharacter();
+    var friendX = -PIPE.roomRadius*0.45, friendZ = -PIPE.roomRadius*0.35;
+    friend.position.set(friendX, 0, friendZ);
+    friend.rotation.y = Math.PI * 0.15 + Math.PI; // back to the original facing
+    sewerRoomGroup.add(friend);
+
+    // aim the fishing rod at the actual water pool (room center), rather
+    // than wherever it happens to point from the character's own facing
+    // angle — computed from the rod's real world transform so it stays
+    // correct regardless of how the character or arm are posed
+    aimRodAtWorldYaw(friend, 120); // 300 + 180, wrapped (rotated another 180°)
+
+    // drop the line + fish so they land right on the water's surface, in
+    // the same 120° direction the rod is now aimed, at a distance that
+    // lands on the pool rather than short of it or past the far bank.
+    // friendX/friendZ are local to sewerRoomGroup, so the room's own
+    // world offset (PIPE.roomX, PIPE.roomZ) has to be added back in to
+    // get a true world-space point for worldToLocal() to work with.
+    var castYawRad = (120 + 270) * Math.PI / 180;
+    var castDist = PIPE.roomRadius * 0.42 * 0.75; // inside the water circle's edge
+    var waterTargetWorld = new THREE.Vector3(
+      PIPE.roomX + friendX + Math.sin(castYawRad) * castDist,
+      0.05, // just above the water's own y=0.02 surface
+      PIPE.roomZ + friendZ + Math.cos(castYawRad) * castDist
+    );
+    dropLineIntoWater(friend, waterTargetWorld);
+
+    // a red "nuclear button" prop sitting next to the fisherman —
+    // purely decorative, no launch label on it
+    var nukeButton = buildNukeButton();
+    nukeButton.scale.set(0.65, 0.65, 0.65);
+    nukeButton.position.set(friendX - 1.5, 0, friendZ + 0.6);
+    nukeButton.rotation.y = friend.rotation.y + 0.3;
+    sewerRoomGroup.add(nukeButton);
+
+    // --- the return pipe: a stub set into the wall that sends the player
+    // back up to the surface pipe when they walk into it. Its axis points
+    // inward along the room's radius (from the wall toward the center),
+    // open end facing into the room — not straight up through the ceiling.
+    var returnAngle = Math.PI/2; // fixed spot along the wall
+    var retDirX = Math.cos(returnAngle), retDirZ = Math.sin(returnAngle); // unit vector pointing outward, wall-to-center is the negative of this
+    var retX = retDirX * (PIPE.roomRadius - 1.0);
+    var retZ = retDirZ * (PIPE.roomRadius - 1.0);
+    var retPipeLen = 2.6;
+    var retPipeY = 1.1;
+    sewerReturnWorldPos.set(PIPE.roomX + retX, 0, PIPE.roomZ + retZ);
+
+    var retPipeGeo = new THREE.CylinderGeometry(1.0, 1.0, retPipeLen, 12, 1, true);
+    var retPipe = new THREE.Mesh(retPipeGeo, pipeMatShared());
+    // default cylinder axis is +Y; rotate it to lie flat along the
+    // outward/inward radial direction (retDirX, retDirZ)
+    retPipe.rotation.order = 'YXZ';
+    retPipe.rotation.y = -returnAngle + Math.PI/2;
+    retPipe.rotation.x = Math.PI/2;
+    // half-buried in the wall, open end (the near/inward half) sticking
+    // out into the room
+    retPipe.position.set(
+      retX + retDirX*retPipeLen*0.35,
+      retPipeY,
+      retZ + retDirZ*retPipeLen*0.35
+    );
+    sewerRoomGroup.add(retPipe);
+
+    // the open mouth sits at the inward end, facing back toward the room's
+    // center — this is the actual trigger point players walk up to
+    var retMouthX = retX - retDirX*retPipeLen*0.1;
+    var retMouthZ = retZ - retDirZ*retPipeLen*0.1;
+    sewerReturnWorldPos.set(PIPE.roomX + retMouthX, 0, PIPE.roomZ + retMouthZ);
+
+    var retOpenGeo = new THREE.CircleGeometry(0.86, 14);
+    var retOpen = new THREE.Mesh(retOpenGeo, new THREE.MeshBasicMaterial({ color:0xdfe8ea }));
+    retOpen.rotation.copy(retPipe.rotation);
+    retOpen.rotateX(Math.PI/2);
+    retOpen.position.set(retMouthX, retPipeY, retMouthZ);
+    sewerRoomGroup.add(retOpen);
+
+    // rim ring around the return mouth, matching the outdoor pipe's look
+    var retRimGeo = new THREE.TorusGeometry(1.0, 0.12, 8, 16);
+    var retRim = new THREE.Mesh(retRimGeo, pipeMatShared());
+    retRim.rotation.copy(retOpen.rotation);
+    retRim.position.set(retMouthX, retPipeY, retMouthZ);
+    sewerRoomGroup.add(retRim);
+
+    var retLight = new THREE.PointLight(0xffffff, 0.6, 4, 2);
+    retLight.position.set(retMouthX, retPipeY + 0.4, retMouthZ);
+    sewerRoomGroup.add(retLight);
+  }
+
+  var _sharedPipeMat = null;
+  function pipeMatShared(){
+    if(!_sharedPipeMat){
+      _sharedPipeMat = new THREE.MeshStandardMaterial({ color:0x5a7d4a, flatShading:true, roughness:0.75 });
+    }
+    return _sharedPipeMat;
+  }
+
+  // distance check helper (XZ plane only)
+  function distXZ(x0, z0, x1, z1){
+    var dx = x1-x0, dz = z1-z0;
+    return Math.sqrt(dx*dx + dz*dz);
+  }
+
+  // Smoothly fades the screen to black, moves the player to a new spot,
+  // then fades back in — shared by both the down-pipe and the return-pipe
+  // teleports so they feel identical.
+  var _outdoorBackground = null, _outdoorFogColor = null, _outdoorFogNear = null, _outdoorFogFar = null;
+  var _sewerBackground = new THREE.Color(0x0e1710);
+
+  function fadeTeleportPlayer(toX, toZ, toInSewer){
+    if(teleportCooldown > 0) return;
+    teleportCooldown = 2.5; // long enough that even a slow-reacting player is well clear of both trigger radii before either can fire again
+    screenFadeEl.classList.add('show');
+    setTimeout(function(){
+      playerState.pos.set(toX, 0, toZ);
+      playerState.velocity.set(0,0,0);
+      playerState.knockVel.set(0,0,0);
+      inSewer = toInSewer;
+
+      // swap the sky/fog so the sewer's murky green room is actually
+      // visible (the outdoor fog would otherwise fade it to solid sky-blue
+      // within a few meters, since the room sits far outside the fog's
+      // normal 40-110 range)
+      if(toInSewer){
+        if(_outdoorBackground === null){
+          _outdoorBackground = scene.background.clone();
+          _outdoorFogColor = scene.fog.color.clone();
+          _outdoorFogNear = scene.fog.near;
+          _outdoorFogFar = scene.fog.far;
+        }
+        scene.background = _sewerBackground;
+        scene.fog.color.set(0x0e1710);
+        scene.fog.near = 6;
+        scene.fog.far = PIPE.roomRadius + 4;
+      } else if(_outdoorBackground !== null){
+        scene.background = _outdoorBackground;
+        scene.fog.color.copy(_outdoorFogColor);
+        scene.fog.near = _outdoorFogNear;
+        scene.fog.far = _outdoorFogFar;
+      }
+
+      updatePlayerTransform();
+      setTimeout(function(){
+        screenFadeEl.classList.remove('show');
+      }, 60);
+    }, 620); // slightly longer than the 0.6s CSS fade so the screen is fully black before we move anything
+  }
+
+  function updateSewerTeleports(dt){
+    if(teleportCooldown > 0) teleportCooldown -= dt;
+
+    if(!inSewer){
+      var dMouth = distXZ(playerState.pos.x, playerState.pos.z, PIPE.mouthX, PIPE.mouthZ);
+      if(dMouth <= PIPE.triggerRadius){
+        // spawn well outside the return-pipe's own trigger radius, otherwise
+        // the very next frame immediately teleports the player right back up
+        fadeTeleportPlayer(sewerReturnWorldPos.x, sewerReturnWorldPos.z + PIPE.returnTriggerRadius + 1.5, true);
+      }
+    } else {
+      var dRet = distXZ(playerState.pos.x, playerState.pos.z, sewerReturnWorldPos.x, sewerReturnWorldPos.z);
+      if(dRet <= PIPE.returnTriggerRadius){
+        // same idea in reverse: land clear of the outdoor mouth's own trigger radius
+        fadeTeleportPlayer(PIPE.mouthX - (PIPE.triggerRadius + 1.5), PIPE.mouthZ, false);
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------------
   // KING OF THE HILL — contest logic. The host (or the solo player, who is
   // its own authority) tracks how long each player has stood inside the
   // red circle; standing there accumulates time, stepping out freezes it
@@ -2650,8 +3749,12 @@
 
     var myTime = HillGame.times[myId] || 0;
     var amInZone = isInHillZone(playerState.pos.x, playerState.pos.z) && !HillGame.finaleRunning;
-    hillTimerEl.textContent = Math.max(0, HILL_WIN_TIME - myTime).toFixed(1);
+    var timeLeft = Math.max(0, HILL_WIN_TIME - myTime);
+    hillTimerEl.textContent = timeLeft.toFixed(1);
     hillTimerEl.classList.toggle('active', amInZone);
+    // last stretch before a win: pulse the timer so the panel itself
+    // signals "almost there" while still standing in the zone
+    hillTimerEl.classList.toggle('urgent', amInZone && timeLeft <= 8 && timeLeft > 0);
 
     hillPlayerListEl.innerHTML = '';
     var leaderId = ids[0];
@@ -2886,6 +3989,7 @@
     playerState.pos.set(0, 0, 6);
     playerState.velocity.set(0,0,0);
     playerState.knockVel.set(0,0,0);
+    inSewer = false;
     updatePlayerTransform();
   }
 
@@ -2904,9 +4008,13 @@
     setupLockerRoom();
 
     // king-of-the-hill branch: short dead-end fork to +X, opposite side
-    // from the locker room and closer to spawn, per the sketched layout
+    // from the locker room and closer to spawn, per the sketched layout.
+    // The sewer pipe is built into this same hill's near flank (see
+    // setupSewerPipe), so no separate branch path is needed for it — you
+    // reach the pipe just by walking up to the hill along this path.
     addPathSegment(HILL.branchX0, HILL.branchZ, HILL.branchX1, HILL.branchZ, PATH_WIDTH);
     setupHillArena();
+    setupSewerPipe();
   }
 
   // ---------------------------------------------------------------------
@@ -3903,7 +5011,8 @@
       radius: 0.55,
       airborne: false,
       spinVel: new THREE.Vector3(0,0,0),
-      restTimer: 0
+      restTimer: 0,
+      squashT: 0 // counts down after a kick impact to drive a brief squash-and-stretch pulse
     };
   }
 
@@ -4251,6 +5360,9 @@
     d.vel.set(dx * KICK_FORCE, KICK_UP, dz * KICK_FORCE);
     d.spinVel.set((Math.random()-0.5)*14, (Math.random()-0.5)*14, (Math.random()-0.5)*14);
     d.airborne = true;
+    // brief squash-and-stretch on impact — purely cosmetic, decays on its
+    // own in updateDummyPhysics, doesn't touch launch physics at all
+    d.squashT = 0.18;
   }
 
   // ---------------------------------------------------------------------
@@ -4411,6 +5523,11 @@
       }
     }
 
+    // small bright contact spark right at the impact point — purely local
+    // visual feedback (like triggerShake), so no network event needed; every
+    // client draws its own copy of the kick it just threw
+    spawnKickSpark(targetPos.x, getGroundY(targetPos.x, targetPos.z) + 0.9, targetPos.z);
+
     // player faces the kick direction + tiny lunge animation via quick forward nudge
     playerState.facing = Math.atan2(dx, dz);
     playerState.velocity.x += dx * 1.5;
@@ -4421,6 +5538,52 @@
     setTimeout(function(){ kickBtn.style.transform = ''; }, 120);
 
     kickCooldown = 0.5;
+  }
+
+  // ---------------------------------------------------------------------
+  // KICK CONTACT SPARK — a handful of tiny bright shards that pop at the
+  // exact point of impact and vanish almost immediately. Distinct from the
+  // dummy's own launch/tumble physics: this is just a flash of contact,
+  // gone in a couple of frames, so it reads as "the hit landed" without
+  // competing with the explosion's heavier spark/smoke/shockwave layers.
+  // ---------------------------------------------------------------------
+  var kickSparks = [];
+  function spawnKickSpark(x, y, z){
+    var count = 6;
+    var geo = new THREE.SphereGeometry(0.045, 4, 4);
+    for(var i=0;i<count;i++){
+      // each spark gets its own material instance since opacity is
+      // animated per-spark in updateKickSparks
+      var mat = new THREE.MeshBasicMaterial({ color:0xffe9a8, transparent:true });
+      var spark = new THREE.Mesh(geo, mat);
+      spark.position.set(x, y, z);
+      var ang = Math.random() * Math.PI * 2;
+      var speed = 2 + Math.random()*2.5;
+      spark.userData.vel = new THREE.Vector3(
+        Math.cos(ang) * speed,
+        1 + Math.random()*2,
+        Math.sin(ang) * speed
+      );
+      scene.add(spark);
+      kickSparks.push({ mesh: spark, age: 0 });
+    }
+  }
+
+  function updateKickSparks(dt){
+    for(var i = kickSparks.length - 1; i >= 0; i--){
+      var s = kickSparks[i];
+      s.age += dt;
+      var t = s.age / 0.22;
+      if(t >= 1){
+        scene.remove(s.mesh);
+        kickSparks.splice(i, 1);
+        continue;
+      }
+      s.mesh.position.x += s.mesh.userData.vel.x * dt;
+      s.mesh.position.y += s.mesh.userData.vel.y * dt;
+      s.mesh.position.z += s.mesh.userData.vel.z * dt;
+      s.mesh.material.opacity = Math.max(0, 1 - t);
+    }
   }
 
   // host-only: apply a kick impulse to another connected player. If the
@@ -4442,6 +5605,20 @@
     dummyIdleT += dt;
     for(var i=0;i<dummies.length;i++){
       var d = dummies[i];
+
+      // squash-and-stretch pulse from a recent kick impact — purely a
+      // scale animation, independent of the airborne rotation/position
+      // physics below, so it plays the same instant regardless of flight
+      // state and never interferes with the tumble spin
+      if(d.squashT > 0){
+        d.squashT -= dt;
+        var sq = Math.max(0, d.squashT / 0.18);
+        var squashAmt = Math.sin(sq * Math.PI) * 0.22;
+        d.mesh.scale.set(1 + squashAmt, 1 - squashAmt*1.1, 1 + squashAmt);
+      } else if(d.mesh.scale.y !== 1){
+        d.mesh.scale.set(1, 1, 1);
+      }
+
       if(!d.airborne){
         // gentle idle bob + sway so waiting dummies feel alive rather than
         // frozen statues — small per-dummy phase offset (based on index) so
@@ -4482,6 +5659,12 @@
       if(d.pos.y <= groundY){
         d.pos.y = groundY;
         if(Math.abs(d.vel.y) > 1.5){
+          // a hard-enough impact kicks up a bit of ground dust — checked
+          // before we damp d.vel.y below, and only on real bounces (not
+          // the final settle) so a long tumble doesn't spam puffs
+          if(Math.abs(d.vel.y) > 6){
+            spawnDustPuff(d.pos.x, d.pos.z, 1);
+          }
           // bounce with energy loss
           d.vel.y *= -0.35;
           d.vel.x *= 0.6;
@@ -4879,16 +6062,42 @@
   }
 
   function createExplosionVisual(center){
-    // expanding sphere shockwave + particle shards, pure three.js, cleaned up over time
+    // expanding sphere shockwave + particle shards + a real light pulse, a
+    // ground-hugging shockwave ring, sparks, a short smoke puff, and a
+    // fading scorch decal — same lightweight pure-three.js approach as
+    // before, just with more layers so a dynamite blast actually reads as
+    // an impact rather than a single flat flash-and-fizzle
     var groundY = getGroundY(center.x, center.z);
+
+    // core flash — kept from the original, still the visual anchor
     var flashGeo = new THREE.SphereGeometry(0.5, 12, 12);
     var flashMat = new THREE.MeshBasicMaterial({ color:0xffc93c, transparent:true, opacity:0.9 });
     var flash = new THREE.Mesh(flashGeo, flashMat);
     flash.position.set(center.x, groundY + 1, center.z);
     scene.add(flash);
 
+    // real point light so the blast actually lights up nearby geometry for
+    // a couple of frames instead of only drawing a glowing shape — cheap
+    // since shadows are globally disabled, and the light is torn down as
+    // soon as the effect ages out
+    var blastLight = new THREE.PointLight(0xffb24a, 3.2, 16, 2);
+    blastLight.position.set(center.x, groundY + 1.2, center.z);
+    scene.add(blastLight);
+
+    // ground-hugging shockwave ring, expanding outward and thinning —
+    // gives the blast a sense of pushing outward across the ground, not
+    // just upward
+    var shockwave = new THREE.Mesh(
+      new THREE.TorusGeometry(0.6, 0.18, 6, 20),
+      new THREE.MeshBasicMaterial({ color:0xffdf9c, transparent:true, opacity:0.75 })
+    );
+    shockwave.rotation.x = Math.PI/2;
+    shockwave.position.set(center.x, groundY + 0.08, center.z);
+    scene.add(shockwave);
+
+    // chunky debris shards — same tetrahedron look as before
     var particles = [];
-    var particleCount = 18;
+    var particleCount = 22;
     var particleGeo = new THREE.TetrahedronGeometry(0.25, 0);
     for(var i=0;i<particleCount;i++){
       var pMat = new THREE.MeshStandardMaterial({
@@ -4896,6 +6105,8 @@
         flatShading:true
       });
       var p = new THREE.Mesh(particleGeo, pMat);
+      var pScale = 0.7 + Math.random()*0.7;
+      p.scale.set(pScale, pScale, pScale);
       p.position.set(center.x, groundY + 1, center.z);
       var ang = Math.random() * Math.PI * 2;
       var speed = 4 + Math.random()*6;
@@ -4909,11 +6120,69 @@
       particles.push(p);
     }
 
+    // fine sparks — small, fast, short-lived points distinct from the
+    // bigger debris chunks; these are what make the very first instant of
+    // the blast feel energetic rather than just a slow flash
+    var sparks = [];
+    var sparkCount = 14;
+    var sparkGeo = new THREE.SphereGeometry(0.06, 5, 5);
+    var sparkMat = new THREE.MeshBasicMaterial({ color:0xfff1b8 });
+    for(var s=0;s<sparkCount;s++){
+      var spark = new THREE.Mesh(sparkGeo, sparkMat);
+      spark.position.set(center.x, groundY + 1, center.z);
+      var sAng = Math.random() * Math.PI * 2;
+      var sSpeed = 9 + Math.random()*10;
+      var sUp = 5 + Math.random()*9;
+      spark.userData.vel = new THREE.Vector3(
+        Math.cos(sAng) * sSpeed,
+        sUp,
+        Math.sin(sAng) * sSpeed
+      );
+      scene.add(spark);
+      sparks.push(spark);
+    }
+
+    // brief smoke puff — a couple of soft, slow-rising, expanding spheres
+    // so the blast leaves a trailing moment behind it instead of vanishing
+    // the instant the flash fades. Tracked in the separate smokePuffs array
+    // (own 2.2s lifetime) rather than explosionEffects, so it actually
+    // lingers past the flash/spark/shockwave layer instead of being culled
+    // together with it at 1.3s.
+    var smokeMat = new THREE.MeshStandardMaterial({ color:0x5c574f, flatShading:true, roughness:1, transparent:true, opacity:0.55 });
+    var smokeCount = 3;
+    for(var m=0;m<smokeCount;m++){
+      var puff = new THREE.Mesh(new THREE.SphereGeometry(0.45, 7, 6), smokeMat.clone());
+      puff.position.set(
+        center.x + (Math.random()-0.5)*0.6,
+        groundY + 0.6 + m*0.25,
+        center.z + (Math.random()-0.5)*0.6
+      );
+      var rise = 0.6 + Math.random()*0.5;
+      var growTo = 1.6 + Math.random()*0.8;
+      scene.add(puff);
+      smokePuffs.push({ mesh: puff, age: 0, maxAge: 2.0 + Math.random()*0.5, rise: rise, growTo: growTo });
+    }
+
+    // fading scorch mark on the ground — a flattened dark disc that stays
+    // behind after everything else has cleared, so repeated blasts leave a
+    // visible trace instead of the ground looking untouched each time
+    var scorch = new THREE.Mesh(
+      new THREE.CircleGeometry(1.8, 16),
+      new THREE.MeshBasicMaterial({ color:0x1a1712, transparent:true, opacity:0.55, depthWrite:false })
+    );
+    scorch.rotation.x = -Math.PI/2;
+    scorch.position.set(center.x, groundY + 0.03, center.z);
+    scene.add(scorch);
+    scorchMarks.push({ mesh: scorch, age: 0, maxAge: 6.5 });
+
     explosionEffects.push({
       flash: flash,
+      blastLight: blastLight,
+      shockwave: shockwave,
       particles: particles,
+      sparks: sparks,
       age: 0,
-      maxAge: 1.1
+      maxAge: 1.3
     });
   }
 
@@ -5131,6 +6400,29 @@
         }
       }
 
+      // blast light: punches up bright for an instant, then decays fast —
+      // this is what actually lights up nearby dummies/ground on impact
+      if(fx.blastLight){
+        var lt = Math.min(1, t / 0.35);
+        fx.blastLight.intensity = 3.2 * Math.max(0, 1 - lt*lt);
+        if(t >= 0.35 && fx.blastLightRemoved !== true){
+          scene.remove(fx.blastLight);
+          fx.blastLightRemoved = true;
+        }
+      }
+
+      // shockwave ring: grows outward across the ground and thins as it goes
+      if(fx.shockwave){
+        var wt = Math.min(1, t / 0.6);
+        var ringScale = 1 + wt * 9;
+        fx.shockwave.scale.set(ringScale, ringScale, ringScale);
+        fx.shockwave.material.opacity = Math.max(0, 0.75 * (1 - wt));
+        if(wt >= 1){
+          scene.remove(fx.shockwave);
+          fx.shockwave = null;
+        }
+      }
+
       for(var j=0;j<fx.particles.length;j++){
         var p = fx.particles[j];
         p.userData.vel.y += GRAVITY * dt;
@@ -5143,12 +6435,103 @@
         p.material.opacity = Math.max(0, 1 - t);
       }
 
+      // sparks: fast, gravity-heavy, fizzle out quicker than the chunky debris
+      if(fx.sparks){
+        for(var q=0;q<fx.sparks.length;q++){
+          var sp = fx.sparks[q];
+          sp.userData.vel.y += GRAVITY * 1.4 * dt;
+          sp.position.x += sp.userData.vel.x * dt;
+          sp.position.y += sp.userData.vel.y * dt;
+          sp.position.z += sp.userData.vel.z * dt;
+          if(sp.material.opacity === undefined) sp.material.transparent = true;
+          sp.material.opacity = Math.max(0, 1 - t*1.6);
+        }
+      }
+
       if(t >= 1){
         for(var k=0;k<fx.particles.length;k++){
           scene.remove(fx.particles[k]);
         }
+        if(fx.sparks){
+          for(var r=0;r<fx.sparks.length;r++) scene.remove(fx.sparks[r]);
+        }
+        if(fx.shockwave) scene.remove(fx.shockwave);
+        if(fx.blastLight && !fx.blastLightRemoved) scene.remove(fx.blastLight);
         explosionEffects.splice(i, 1);
       }
+    }
+  }
+
+  // Lingering post-blast smoke — tracked separately from explosionEffects
+  // (own longer lifetime) so it actually outlives the flash/spark/shockwave
+  // layer instead of being culled together with it.
+  function updateSmokePuffs(dt){
+    for(var i = smokePuffs.length - 1; i >= 0; i--){
+      var puff = smokePuffs[i];
+      puff.age += dt;
+      var t = puff.age / puff.maxAge;
+      if(t >= 1){
+        scene.remove(puff.mesh);
+        smokePuffs.splice(i, 1);
+        continue;
+      }
+      puff.mesh.position.y += puff.rise * dt;
+      var puffScale = 1 + t * puff.growTo;
+      puff.mesh.scale.set(puffScale, puffScale, puffScale);
+      puff.mesh.material.opacity = Math.max(0, 0.5 * (1 - t));
+    }
+  }
+
+  // Fading scorch decals left on the ground after a blast — tracked
+  // separately from explosionEffects since they outlive the flash/debris
+  // by several seconds, giving the map a sense of "something happened here"
+  function updateScorchMarks(dt){
+    for(var i = scorchMarks.length - 1; i >= 0; i--){
+      var mark = scorchMarks[i];
+      mark.age += dt;
+      var t = mark.age / mark.maxAge;
+      if(t >= 1){
+        scene.remove(mark.mesh);
+        scorchMarks.splice(i, 1);
+        continue;
+      }
+      // holds mostly opaque, then fades out over the final third of its life
+      var fadeStart = 0.6;
+      if(t > fadeStart){
+        var ft = (t - fadeStart) / (1 - fadeStart);
+        mark.mesh.material.opacity = 0.55 * (1 - ft);
+      }
+    }
+  }
+
+  // Small ground-impact dust puffs — quick, cheap, expanding+fading rings
+  // used for dummy/player landings and kick contacts, distinct from the
+  // heavier smoke used by explosions
+  function spawnDustPuff(x, z, scale){
+    var groundY = getGroundY(x, z);
+    var puff = new THREE.Mesh(
+      new THREE.CircleGeometry(0.35 * (scale||1), 10),
+      new THREE.MeshBasicMaterial({ color:0xcdbfa0, transparent:true, opacity:0.5, depthWrite:false })
+    );
+    puff.rotation.x = -Math.PI/2;
+    puff.position.set(x, groundY + 0.04, z);
+    scene.add(puff);
+    dustPuffs.push({ mesh: puff, age: 0, maxAge: 0.5 });
+  }
+
+  function updateDustPuffs(dt){
+    for(var i = dustPuffs.length - 1; i >= 0; i--){
+      var d = dustPuffs[i];
+      d.age += dt;
+      var t = d.age / d.maxAge;
+      if(t >= 1){
+        scene.remove(d.mesh);
+        dustPuffs.splice(i, 1);
+        continue;
+      }
+      var s = 1 + t * 2.2;
+      d.mesh.scale.set(s, s, s);
+      d.mesh.material.opacity = Math.max(0, 0.5 * (1 - t));
     }
   }
 
@@ -5213,6 +6596,11 @@
       if(playerState.pos.y <= groundYHere){
         playerState.pos.y = groundYHere;
         if(Math.abs(playerState.knockVel.y) > 1.5){
+          // hard landing kicks up dust too, same threshold and look as the
+          // dummies' version so a kicked player reads the same way
+          if(Math.abs(playerState.knockVel.y) > 6){
+            spawnDustPuff(playerState.pos.x, playerState.pos.z, 1);
+          }
           // small bounce with energy loss, mirroring the dummy's landing feel
           playerState.knockVel.y *= -0.35;
           // each bounce also sheds most of the horizontal speed (matches the
@@ -5259,10 +6647,27 @@
     // from walking through the walls anywhere but the two signposted gaps
     resolveLockerWallCollisions(playerState.pos, playerState.radius);
 
-    // clamp inside world bounds
-    var half = WORLD_SIZE/2 - 2;
-    playerState.pos.x = THREE.MathUtils.clamp(playerState.pos.x, -half, half);
-    playerState.pos.z = THREE.MathUtils.clamp(playerState.pos.z, -half, half);
+    // clamp inside world bounds — the sewer room is its own separate pocket
+    // far outside the normal map, so it clamps against its own circular
+    // radius instead of the outdoor square bounds
+    if(inSewer){
+      var relX = playerState.pos.x - PIPE.roomX, relZ = playerState.pos.z - PIPE.roomZ;
+      var relDist = Math.sqrt(relX*relX + relZ*relZ);
+      var maxR = PIPE.roomRadius - 0.6;
+      if(relDist > maxR){
+        var scale = maxR / relDist;
+        playerState.pos.x = PIPE.roomX + relX*scale;
+        playerState.pos.z = PIPE.roomZ + relZ*scale;
+      }
+    } else {
+      var half = WORLD_SIZE/2 - 2;
+      playerState.pos.x = THREE.MathUtils.clamp(playerState.pos.x, -half, half);
+      playerState.pos.z = THREE.MathUtils.clamp(playerState.pos.z, -half, half);
+    }
+
+    // sewer pipe: check proximity to either pipe mouth and smoothly
+    // teleport the player between the surface and the sewer room
+    updateSewerTeleports(dt);
 
     // stepping onto a podium recolors the player immediately
     updatePodiumStanding();
@@ -5306,12 +6711,26 @@
     camera.rotation.z = 0;
   }
 
+  var coordsDisplayEl = document.getElementById('coordsDisplay');
+  function updateCoordsDisplay(){
+    if(!coordsDisplayEl) return;
+    var p = playerState.pos;
+    var yawDeg = ((playerState.yaw * 180 / Math.PI) % 360 + 360) % 360;
+    coordsDisplayEl.textContent =
+      'X: ' + p.x.toFixed(2) + '\n' +
+      'Y: ' + p.y.toFixed(2) + '\n' +
+      'Z: ' + p.z.toFixed(2) + '\n' +
+      'yaw: ' + yawDeg.toFixed(1) + '°' +
+      (inSewer ? '\n[канализация]' : '');
+  }
+
   function animate(){
     requestAnimationFrame(animate);
     var dt = Math.min(clock.getDelta(), 0.05);
 
     updatePlayerMovement(dt);
     updateCamera(dt);
+    updateCoordsDisplay();
 
     // dummy ragdoll physics only runs where it's authoritative: solo play
     // or the host. Guests just render whatever the host's snapshot says.
@@ -5320,6 +6739,10 @@
     }
     updateDynamite(dt);
     updateExplosionEffects(dt);
+    updateScorchMarks(dt);
+    updateDustPuffs(dt);
+    updateSmokePuffs(dt);
+    updateKickSparks(dt);
     updateNukeEffects(dt);
 
     // King of the Hill: only the host (or the solo player, who is its own
