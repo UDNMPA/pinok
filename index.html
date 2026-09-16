@@ -228,9 +228,12 @@
     position:fixed; inset:0; z-index:40;
     background:rgba(26,27,46,0.78);
     display:none;
-    align-items:center; justify-content:center;
+    align-items:flex-start; justify-content:center;
     pointer-events:auto;
     padding:20px;
+    overflow-y:auto;
+    -webkit-overflow-scrolling:touch;
+    touch-action:pan-y;
   }
   #settingsPanel.show{ display:flex; }
   #settingsCard{
@@ -241,6 +244,7 @@
     width:100%;
     max-width:340px;
     box-shadow:0 14px 0 rgba(0,0,0,0.35);
+    margin:auto;
   }
   .settingsTitle{
     color:var(--paper);
@@ -296,14 +300,15 @@
   }
   .qualityRow{
     display:flex;
+    flex-wrap:wrap;
     gap:8px;
     margin-bottom:22px;
   }
   .qualityBtn{
-    flex:1;
+    flex:1 1 28%;
     font-family:'Baloo 2', sans-serif;
     font-weight:800;
-    font-size:13px;
+    font-size:12px;
     color:rgba(245,245,255,0.85);
     background:rgba(255,255,255,0.08);
     border:3px solid rgba(255,255,255,0.15);
@@ -1256,21 +1261,23 @@
           Чувствительность камеры
           <span id="sensValue">50%</span>
         </label>
-        <input type="range" id="sensSlider" min="5" max="150" value="50" step="1">
+        <input type="range" id="sensSlider" min="5" max="300" value="50" step="1">
 
         <label class="settingsLabel" for="volSlider">
           Громкость звука
           <span id="volValue">80%</span>
         </label>
-        <input type="range" id="volSlider" min="0" max="100" value="80" step="1">
+        <input type="range" id="volSlider" min="0" max="1000" value="80" step="1">
 
         <div class="settingsDivider"></div>
 
         <label class="settingsLabel">Качество графики</label>
         <div class="qualityRow">
+          <button type="button" class="qualityBtn" data-quality="ultralow">МЕГА МАЛОЕ</button>
           <button type="button" class="qualityBtn" data-quality="low">НИЗКОЕ</button>
           <button type="button" class="qualityBtn" data-quality="medium">СРЕДНЕЕ</button>
           <button type="button" class="qualityBtn" data-quality="high">ВЫСОКОЕ</button>
+          <button type="button" class="qualityBtn" data-quality="ultrahigh">МЕГА ЛУЧШЕЕ</button>
         </div>
 
         <label class="settingsLabel" for="drawDistSlider">
@@ -1339,16 +1346,52 @@
   // SETTINGS (sensitivity + volume, persisted across reloads)
   // ---------------------------------------------------------------------
   var Settings = {
-    sensitivity: 50, // percent, slider range 5-150, 50 = default feel
-    volume: 80,       // percent, master volume 0-100
-    quality: 'high',  // 'low' | 'medium' | 'high' — pixel ratio + light/effect detail
+    sensitivity: 50, // percent, slider range 5-300, 50 = default feel
+    volume: 80,       // percent, master volume 0-1000 (values above 100 amplify beyond normal level)
+    quality: 'high',  // 'ultralow' | 'low' | 'medium' | 'high' | 'ultrahigh' — pixel ratio + light/effect detail
     drawDistance: 100 // percent, 35-100 — scales fog/camera far and prop culling radius
   };
 
   // pixel ratio cap per quality tier — this is the single biggest GPU-cost
   // lever on weak devices, since it scales the number of fragment-shader
   // invocations quadratically
-  var QUALITY_PIXEL_RATIO = { low: 1.4, medium: 1.7, high: Math.min(window.devicePixelRatio || 1, 2) };
+  var QUALITY_PIXEL_RATIO = {
+    ultralow: 1.2,
+    low: 1.4,
+    medium: 1.7,
+    high: Math.min(window.devicePixelRatio || 1, 2),
+    ultrahigh: Math.min(window.devicePixelRatio || 1, 3)
+  };
+  var QUALITY_LEVELS = ['ultralow', 'low', 'medium', 'high', 'ultrahigh'];
+
+  // texture resolution multiplier per quality tier — every hand-drawn canvas
+  // texture (grass/path/sewer/etc) is generated at BASE_SIZE * this factor,
+  // so ultrahigh gets noticeably crisper, more detailed surfaces everywhere
+  // instead of just a higher pixel ratio on the same blurry 64-128px tiles
+  var QUALITY_TEXTURE_SCALE = {
+    ultralow: 0.5,
+    low: 0.75,
+    medium: 1,
+    high: 1,
+    ultrahigh: 4
+  };
+  function textureScale(){
+    return QUALITY_TEXTURE_SCALE[Settings.quality] || 1;
+  }
+  // max anisotropic filtering on ultrahigh keeps ground/path textures sharp
+  // at grazing viewing angles instead of turning to mush in the distance —
+  // one of the single biggest "this looks way better" wins for a flat floor
+  var _maxAniso = null;
+  function getMaxAnisotropy(){
+    if(_maxAniso !== null) return _maxAniso;
+    _maxAniso = (renderer && renderer.capabilities) ? renderer.capabilities.getMaxAnisotropy() : 1;
+    return _maxAniso;
+  }
+  function applyAnisotropy(tex){
+    if(!tex) return tex;
+    tex.anisotropy = (Settings.quality === 'ultrahigh') ? getMaxAnisotropy() : 1;
+    return tex;
+  }
 
   (function loadSettings(){
     try{
@@ -1357,7 +1400,7 @@
         var parsed = JSON.parse(saved);
         if(typeof parsed.sensitivity === 'number') Settings.sensitivity = parsed.sensitivity;
         if(typeof parsed.volume === 'number') Settings.volume = parsed.volume;
-        if(parsed.quality === 'low' || parsed.quality === 'medium' || parsed.quality === 'high') Settings.quality = parsed.quality;
+        if(QUALITY_LEVELS.indexOf(parsed.quality) !== -1) Settings.quality = parsed.quality;
         if(typeof parsed.drawDistance === 'number') Settings.drawDistance = THREE.MathUtils.clamp(parsed.drawDistance, 35, 100);
       }
     }catch(e){ /* localStorage unavailable or corrupt data: keep defaults */ }
@@ -2572,6 +2615,65 @@
     // antialiasing is fixed at renderer creation time in three r128, so on
     // low/medium we compensate by capping resolution harder instead
     onResize();
+
+    var ultra = (Settings.quality === 'ultrahigh');
+
+    // МЕГА ЛУЧШЕЕ turns on real dynamic shadows + a crisper shadow map,
+    // and a filmic tone-mapped exposure for punchier contrast/highlights —
+    // every other tier keeps shadows off for performance
+    renderer.shadowMap.enabled = ultra;
+    renderer.shadowMap.type = ultra ? THREE.PCFSoftShadowMap : THREE.BasicShadowMap;
+    renderer.toneMapping = ultra ? THREE.ACESFilmicToneMapping : THREE.NoToneMapping;
+    renderer.toneMappingExposure = ultra ? 1.15 : 1.0;
+    if(sunLight){
+      sunLight.shadow.mapSize.width = ultra ? 2048 : 512;
+      sunLight.shadow.mapSize.height = ultra ? 2048 : 512;
+      // mapSize changes require the shadow map to be rebuilt
+      if(sunLight.shadow.map){
+        sunLight.shadow.map.dispose();
+        sunLight.shadow.map = null;
+      }
+    }
+
+    // re-sharpen every live texture: regenerate the hand-drawn canvases at
+    // the new resolution and (un)apply anisotropic filtering to match
+    refreshAllTextures();
+
+    // scene materials that only make sense at ultrahigh (specular highlights
+    // on the ground, finer geometry) toggle here too
+    if(groundMesh){
+      groundMesh.material.roughness = ultra ? 0.65 : 0.95;
+      groundMesh.material.envMapIntensity = ultra ? 1.0 : 0.0;
+      groundMesh.material.needsUpdate = true;
+    }
+
+    // cloud density depends on quality tier — rebuild the cloud layer to
+    // match whenever the setting changes (skip on first call, before the
+    // scene/clouds exist yet; initGame's own setupSky() handles that case)
+    if(scene && cloudSystem){
+      scene.remove(cloudSystem.group);
+      cloudSystem.group.traverse(function(obj){
+        if(obj.material){ obj.material.dispose(); }
+      });
+      setupClouds();
+    }
+
+  }
+
+  // registry of {tex, rebuild} pairs so every hand-drawn texture in the game
+  // can be regenerated at a new resolution + anisotropy when quality changes
+  var _liveTextures = [];
+  function registerLiveTexture(tex, rebuildFn){
+    _liveTextures.push({ tex: tex, rebuild: rebuildFn });
+    applyAnisotropy(tex);
+    return tex;
+  }
+  function refreshAllTextures(){
+    for(var i=0;i<_liveTextures.length;i++){
+      var entry = _liveTextures[i];
+      if(entry.rebuild) entry.rebuild(entry.tex);
+      applyAnisotropy(entry.tex);
+    }
   }
 
   function applyDrawDistance(){
@@ -2614,12 +2716,12 @@
     camera = new THREE.PerspectiveCamera(72, window.innerWidth/window.innerHeight, 0.1, CAMERA_FAR_BASE);
     camera.rotation.order = 'YXZ';
 
-    renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: Settings.quality !== 'low' });
+    renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: (Settings.quality !== 'low' && Settings.quality !== 'ultralow') });
     renderer.setPixelRatio(QUALITY_PIXEL_RATIO[Settings.quality] || QUALITY_PIXEL_RATIO.high);
     renderer.setSize(window.innerWidth, window.innerHeight);
-    // shadows disabled globally — this one flag turns off shadow rendering
-    // for every light/mesh in the scene, regardless of their individual
-    // castShadow/receiveShadow flags, so nothing else needs to change
+    // shadows off by default; МЕГА ЛУЧШЕЕ (ultrahigh) turns real dynamic
+    // shadows + filmic tone mapping on via applyQualitySettings() below,
+    // which also runs on every later quality change
     renderer.shadowMap.enabled = false;
 
     clock = new THREE.Clock();
@@ -2627,11 +2729,13 @@
     applyDrawDistance();
 
     setupLights();
+    setupSky();
     setupGround();
     setupPlayer();
     setupPathAndLocker();
     setupDummies();
     updateCamera(0);
+    applyQualitySettings();
 
     window.addEventListener('resize', onResize);
     onResize();
@@ -2658,6 +2762,7 @@
   // ---------------------------------------------------------------------
   // LIGHTS
   // ---------------------------------------------------------------------
+  var sunLight = null; // module-level ref so applyQualitySettings can rebuild its shadow map
   function setupLights(){
     var hemi = new THREE.HemisphereLight(0xbfe3ff, 0x3a6b35, 0.9);
     scene.add(hemi);
@@ -2675,10 +2780,161 @@
     sun.shadow.camera.far = 150;
     sun.shadow.bias = -0.0015;
     scene.add(sun);
+    sunLight = sun;
 
     var fill = new THREE.DirectionalLight(0xffd6e8, 0.25);
     fill.position.set(-20, 20, -30);
     scene.add(fill);
+  }
+
+  // ---------------------------------------------------------------------
+  // SKY + CLOUDS — replaces the flat single-color background with a big
+  // gradient sky dome plus soft, layered, drifting cloud puffs. Cloud
+  // count/detail scales with the quality tier so low-end devices stay fast.
+  // ---------------------------------------------------------------------
+  var cloudSystem = null; // { group, clouds:[{mesh, speed, baseY}] }
+
+  function setupSky(){
+    // gradient dome: painted onto a tall thin canvas and mapped so the
+    // horizon band sits near the visual horizon — much richer than a flat
+    // background color, and cheap (single big sphere, backside-rendered)
+    var skyCanvas = document.createElement('canvas');
+    skyCanvas.width = 2;
+    skyCanvas.height = 256;
+    var ctx = skyCanvas.getContext('2d');
+    var grad = ctx.createLinearGradient(0, 0, 0, 256);
+    grad.addColorStop(0.0, '#1c5fae');   // deep zenith blue
+    grad.addColorStop(0.35, '#3d86cf');
+    grad.addColorStop(0.62, '#8ecae6');  // matches old flat sky/fog color
+    grad.addColorStop(0.82, '#cfe9f5');  // pale near horizon
+    grad.addColorStop(1.0, '#eef8fb');   // hazy horizon line
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, 2, 256);
+    var skyTex = new THREE.CanvasTexture(skyCanvas);
+    skyTex.colorSpace && (skyTex.colorSpace = THREE.SRGBColorSpace);
+
+    var skyGeo = new THREE.SphereGeometry(CAMERA_FAR_BASE * 0.92, 24, 16);
+    var skyMat = new THREE.MeshBasicMaterial({
+      map: skyTex,
+      side: THREE.BackSide,
+      fog: false,
+      depthWrite: false
+    });
+    var skyDome = new THREE.Mesh(skyGeo, skyMat);
+    skyDome.renderOrder = -1000;
+    scene.add(skyDome);
+
+    setupClouds();
+  }
+
+  // one soft round puff texture, reused (tinted per-cloud via material color)
+  // across every cloud sprite in the sky — radial gradient from opaque white
+  // center fading to fully transparent edge so clusters of them read as a
+  // single fluffy volumetric-looking cloud instead of hard-edged sprites
+  var _cloudPuffTexture = null;
+  function getCloudPuffTexture(){
+    if(_cloudPuffTexture) return _cloudPuffTexture;
+    var size = 128;
+    var c = document.createElement('canvas');
+    c.width = c.height = size;
+    var ctx = c.getContext('2d');
+    var g = ctx.createRadialGradient(size/2, size/2, 0, size/2, size/2, size/2);
+    g.addColorStop(0.0, 'rgba(255,255,255,1)');
+    g.addColorStop(0.35, 'rgba(255,255,255,0.95)');
+    g.addColorStop(0.7, 'rgba(255,255,255,0.45)');
+    g.addColorStop(1.0, 'rgba(255,255,255,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, size, size);
+    var tex = new THREE.CanvasTexture(c);
+    tex.needsUpdate = true;
+    _cloudPuffTexture = tex;
+    return tex;
+  }
+
+  // cloud detail scales with quality tier: fewer/simpler clouds on weak
+  // devices, a full fluffy sky on high/ultrahigh
+  var CLOUD_COUNT_BY_QUALITY = {
+    ultralow: 5,
+    low: 8,
+    medium: 12,
+    high: 18,
+    ultrahigh: 24
+  };
+
+  function buildCloudMesh(puffCount, scale){
+    var group = new THREE.Group();
+    var tex = getCloudPuffTexture();
+    var baseColor = 0xffffff;
+    for(var i=0;i<puffCount;i++){
+      var mat = new THREE.SpriteMaterial({
+        map: tex,
+        color: baseColor,
+        transparent: true,
+        opacity: 0.9,
+        depthWrite: false,
+        fog: true
+      });
+      var sprite = new THREE.Sprite(mat);
+      // scatter puffs around a rough flattened blob so the silhouette reads
+      // as an irregular cumulus cluster rather than a neat circle
+      var ang = Math.random() * Math.PI * 2;
+      var rad = Math.random() * scale * 0.9;
+      var px = Math.cos(ang) * rad;
+      var pz = Math.sin(ang) * rad * 0.6;
+      var py = (Math.random() - 0.5) * scale * 0.22;
+      sprite.position.set(px, py, pz);
+      var puffScale = scale * (0.55 + Math.random() * 0.55);
+      sprite.scale.set(puffScale, puffScale * 0.62, 1);
+      group.add(sprite);
+    }
+    return group;
+  }
+
+  function setupClouds(){
+    var count = CLOUD_COUNT_BY_QUALITY[Settings.quality] || CLOUD_COUNT_BY_QUALITY.high;
+    var group = new THREE.Group();
+    var clouds = [];
+    var spread = WORLD_SIZE * 1.6;
+    for(var i=0;i<count;i++){
+      var scale = 14 + Math.random() * 22;
+      var puffCount = 5 + Math.floor(Math.random() * 5); // 5-9 puffs per cloud
+      var cloud = buildCloudMesh(puffCount, scale);
+      cloud.position.set(
+        (Math.random() - 0.5) * spread,
+        34 + Math.random() * 28,
+        (Math.random() - 0.5) * spread
+      );
+      group.add(cloud);
+      clouds.push({
+        mesh: cloud,
+        speed: 0.35 + Math.random() * 0.55,
+        baseY: cloud.position.y,
+        bobPhase: Math.random() * Math.PI * 2
+      });
+    }
+    scene.add(group);
+    cloudSystem = { group: group, clouds: clouds, spread: spread };
+  }
+
+  function updateClouds(dt){
+    if(!cloudSystem) return;
+    var half = cloudSystem.spread / 2;
+    var px = playerState ? playerState.pos.x : 0;
+    var pz = playerState ? playerState.pos.z : 0;
+    for(var i=0;i<cloudSystem.clouds.length;i++){
+      var c = cloudSystem.clouds[i];
+      var m = c.mesh;
+      // drift slowly along +X, wrapping around relative to the player so
+      // clouds never visibly run out no matter how far the player walks
+      m.position.x += c.speed * dt;
+      var relX = m.position.x - px;
+      if(relX > half) m.position.x -= cloudSystem.spread;
+      var relZ = m.position.z - pz;
+      if(relZ > half) m.position.z -= cloudSystem.spread;
+      else if(relZ < -half) m.position.z += cloudSystem.spread;
+      // gentle vertical bob so the sky doesn't feel static
+      m.position.y = c.baseY + Math.sin(performance.now() * 0.00015 + c.bobPhase) * 1.2;
+    }
   }
 
   // ---------------------------------------------------------------------
@@ -2815,23 +3071,49 @@
   // hand-drawn-looking (not a photo texture) so it reads as "juicier grass"
   // rather than breaking the low-poly aesthetic — closer to a hand-painted
   // dither pattern than realistic turf.
-  function makeGrassTexture(){
-    var size = 128;
-    var canvas = document.createElement('canvas');
-    canvas.width = size; canvas.height = size;
+  function paintGrassTexture(canvas){
+    var size = canvas.width;
     var ctx = canvas.getContext('2d');
+    var s = size / 128; // scale factor relative to the original 128px design
 
-    // base fill — mid grass green, the vertex-color gradient tints this per-tile
+    // base fill with a soft mottled tone variation instead of one flat
+    // color — a handful of large, very low-opacity blotches of slightly
+    // different greens breaks up the "single airbrushed color" look before
+    // any speckles are even drawn
     ctx.fillStyle = '#6fc26a';
     ctx.fillRect(0, 0, size, size);
+    var blotchCount = Math.round(14 * s * s);
+    for(var b=0;b<blotchCount;b++){
+      var bx0 = Math.random()*size, by0 = Math.random()*size;
+      var br = (10 + Math.random()*22) * s;
+      var bTone = Math.random();
+      ctx.fillStyle = bTone < 0.5 ? 'rgba(60,150,70,0.18)' : 'rgba(150,205,110,0.16)';
+      ctx.beginPath();
+      ctx.ellipse(bx0, by0, br, br*0.7, Math.random()*Math.PI, 0, Math.PI*2);
+      ctx.fill();
+    }
 
-    // scattered darker speckles (denser clumps of blades)
-    for(var i=0;i<260;i++){
+    // soft ambient-occlusion speckling underneath the blade strokes — small
+    // dark, soft-edged dabs that read as shadow pooling between blades
+    var aoCount = Math.round(90 * s * s);
+    for(var a=0;a<aoCount;a++){
+      ctx.fillStyle = 'rgba(30,75,35,0.10)';
+      var ar = (2 + Math.random()*3) * s;
+      ctx.beginPath();
+      ctx.arc(Math.random()*size, Math.random()*size, ar, 0, Math.PI*2);
+      ctx.fill();
+    }
+
+    // scattered darker speckles (denser clumps of blades) — speckle count
+    // scales with area so higher-res tiers get proportionally more detail
+    // instead of the same 260 blades stretched thin over a bigger canvas
+    var speckleCount = Math.round(340 * s * s);
+    for(var i=0;i<speckleCount;i++){
       var x = Math.random()*size, y = Math.random()*size;
       var shade = Math.random();
       ctx.fillStyle = shade < 0.5 ? 'rgba(50,110,55,0.35)' : 'rgba(140,220,120,0.28)';
-      var w = 1 + Math.random()*2.5;
-      var h = 2 + Math.random()*4;
+      var w = (1 + Math.random()*2.5) * s;
+      var h = (2 + Math.random()*4) * s;
       ctx.save();
       ctx.translate(x, y);
       ctx.rotate(Math.random()*Math.PI);
@@ -2839,10 +3121,43 @@
       ctx.restore();
     }
     // a few tiny bright highlight blades for sparkle
-    for(var j=0;j<40;j++){
-      ctx.fillStyle = 'rgba(210,255,180,0.4)';
-      ctx.fillRect(Math.random()*size, Math.random()*size, 1, 3);
+    var highlightCount = Math.round(55 * s * s);
+    for(var j=0;j<highlightCount;j++){
+      ctx.fillStyle = 'rgba(210,255,180,0.42)';
+      ctx.fillRect(Math.random()*size, Math.random()*size, 1*s, 3*s);
     }
+
+    // rare tiny wildflower/clover flecks — a few pale yellow/white dots
+    // scattered very sparsely, purely decorative texture detail
+    var flowerCount = Math.round(6 * s * s);
+    for(var f=0;f<flowerCount;f++){
+      var fx = Math.random()*size, fy = Math.random()*size;
+      ctx.fillStyle = Math.random() < 0.6 ? 'rgba(255,240,190,0.55)' : 'rgba(255,255,255,0.5)';
+      ctx.beginPath();
+      ctx.arc(fx, fy, 1.1*s, 0, Math.PI*2);
+      ctx.fill();
+    }
+
+    // ultrahigh only: extra fine blade strokes + soft ambient-occlusion
+    // speckling for a noticeably richer, less flat-looking lawn up close
+    if(s >= 4){
+      for(var k=0;k<speckleCount*0.6;k++){
+        var bx = Math.random()*size, by = Math.random()*size;
+        ctx.strokeStyle = Math.random() < 0.5 ? 'rgba(35,90,40,0.22)' : 'rgba(170,235,150,0.18)';
+        ctx.lineWidth = 0.6*s;
+        ctx.beginPath();
+        ctx.moveTo(bx, by);
+        ctx.lineTo(bx + (Math.random()*4-2)*s, by - (3+Math.random()*5)*s);
+        ctx.stroke();
+      }
+    }
+  }
+
+  function makeGrassTexture(){
+    var size = Math.round(128 * textureScale());
+    var canvas = document.createElement('canvas');
+    canvas.width = size; canvas.height = size;
+    paintGrassTexture(canvas);
 
     var tex = new THREE.CanvasTexture(canvas);
     tex.wrapS = THREE.RepeatWrapping;
@@ -2850,11 +3165,22 @@
     tex.repeat.set(WORLD_SIZE/6, WORLD_SIZE/6);
     tex.magFilter = THREE.NearestFilter; // keeps the speckles crisp/pixel-arty instead of blurry
     tex.minFilter = THREE.LinearMipmapLinearFilter;
+    registerLiveTexture(tex, function(t){
+      var newSize = Math.round(128 * textureScale());
+      if(t.image.width !== newSize){
+        t.image.width = newSize;
+        t.image.height = newSize;
+      }
+      paintGrassTexture(t.image);
+      t.needsUpdate = true;
+    });
     return tex;
   }
 
   function setupGround(){
-    var segs = 64;
+    // ultrahigh gets a denser mesh so the terrain's hills/slopes read as
+    // smoother curves instead of visible low-poly facets up close
+    var segs = (Settings.quality === 'ultrahigh') ? 128 : 64;
     var geo = new THREE.PlaneGeometry(WORLD_SIZE, WORLD_SIZE, segs, segs);
     geo.rotateX(-Math.PI/2);
 
@@ -2906,33 +3232,69 @@
   }
 
   // ---------------------------------------------------------------------
+  // ---------------------------------------------------------------------
   // PATH — flat low-poly white strip from spawn to the field, with a
   // signposted fork leading into the locker room.
   // ---------------------------------------------------------------------
   // Hand-drawn pebble/gravel speckle texture for the path strips — keeps
   // the flat pale color but adds small darker flecks so it doesn't read as
   // a single dead-flat plane.
-  var _pathTexture = null;
-  function getPathTexture(){
-    if(_pathTexture) return _pathTexture;
-    var size = 64;
-    var canvas = document.createElement('canvas');
-    canvas.width = size; canvas.height = size;
+  function paintPathTexture(canvas){
+    var size = canvas.width;
     var ctx = canvas.getContext('2d');
+    var s = size / 64;
     ctx.fillStyle = '#f5f5ff';
     ctx.fillRect(0, 0, size, size);
-    for(var i=0;i<70;i++){
+    var speckleCount = Math.round(70 * s * s);
+    for(var i=0;i<speckleCount;i++){
       var x = Math.random()*size, y = Math.random()*size;
-      var r = 0.6 + Math.random()*1.6;
+      var r = (0.6 + Math.random()*1.6) * s;
       ctx.fillStyle = Math.random() < 0.6 ? 'rgba(200,198,225,0.5)' : 'rgba(230,228,250,0.6)';
       ctx.beginPath();
       ctx.arc(x, y, r, 0, Math.PI*2);
       ctx.fill();
     }
+    // ultrahigh: finer grit + subtle crack lines for a much more detailed,
+    // worn-stone look instead of just bigger blurry dots
+    if(s >= 4){
+      var fineCount = Math.round(speckleCount*1.5);
+      for(var j=0;j<fineCount;j++){
+        var fx = Math.random()*size, fy = Math.random()*size;
+        ctx.fillStyle = 'rgba(180,178,205,0.3)';
+        ctx.fillRect(fx, fy, 0.8*s, 0.8*s);
+      }
+      for(var k=0;k<Math.round(6*s);k++){
+        ctx.strokeStyle = 'rgba(170,168,200,0.25)';
+        ctx.lineWidth = 0.5*s;
+        ctx.beginPath();
+        var cx = Math.random()*size, cy = Math.random()*size;
+        ctx.moveTo(cx, cy);
+        ctx.lineTo(cx + (Math.random()*16-8)*s, cy + (Math.random()*16-8)*s);
+        ctx.stroke();
+      }
+    }
+  }
+
+  var _pathTexture = null;
+  function getPathTexture(){
+    if(_pathTexture) return _pathTexture;
+    var size = Math.round(64 * textureScale());
+    var canvas = document.createElement('canvas');
+    canvas.width = size; canvas.height = size;
+    paintPathTexture(canvas);
     var tex = new THREE.CanvasTexture(canvas);
     tex.wrapS = THREE.RepeatWrapping;
     tex.wrapT = THREE.RepeatWrapping;
     tex.magFilter = THREE.NearestFilter;
+    registerLiveTexture(tex, function(t){
+      var newSize = Math.round(64 * textureScale());
+      if(t.image.width !== newSize){
+        t.image.width = newSize;
+        t.image.height = newSize;
+      }
+      paintPathTexture(t.image);
+      t.needsUpdate = true;
+    });
     _pathTexture = tex;
     return tex;
   }
@@ -3401,36 +3763,63 @@
 
   // Small tiling canvas texture for the sewer's wet, grimy walls/floor —
   // same "hand-painted speckle" trick used elsewhere, just in murkier tones.
-  var _sewerTexture = null;
-  function getSewerTexture(){
-    if(_sewerTexture) return _sewerTexture;
-    var size = 128;
-    var canvas = document.createElement('canvas');
-    canvas.width = size; canvas.height = size;
+  function paintSewerTexture(canvas){
+    var size = canvas.width;
     var ctx = canvas.getContext('2d');
+    var s = size / 128;
     ctx.fillStyle = '#3a4438';
     ctx.fillRect(0, 0, size, size);
-    for(var i=0;i<180;i++){
+    var speckleCount = Math.round(180 * s * s);
+    for(var i=0;i<speckleCount;i++){
       var x = Math.random()*size, y = Math.random()*size;
-      var r = 0.8 + Math.random()*2.2;
+      var r = (0.8 + Math.random()*2.2) * s;
       ctx.fillStyle = Math.random() < 0.5 ? 'rgba(20,26,20,0.45)' : 'rgba(90,110,80,0.3)';
       ctx.beginPath();
       ctx.arc(x, y, r, 0, Math.PI*2);
       ctx.fill();
     }
     // a few streaky "damp" drips running down
-    for(var j=0;j<10;j++){
+    var dripCount = Math.round(10 * s);
+    for(var j=0;j<dripCount;j++){
       var sx = Math.random()*size;
       ctx.strokeStyle = 'rgba(15,50,40,0.35)';
-      ctx.lineWidth = 1 + Math.random()*2;
+      ctx.lineWidth = (1 + Math.random()*2) * s;
       ctx.beginPath();
       ctx.moveTo(sx, 0);
-      ctx.lineTo(sx + (Math.random()*10-5), size*(0.4+Math.random()*0.6));
+      ctx.lineTo(sx + (Math.random()*10-5)*s, size*(0.4+Math.random()*0.6));
       ctx.stroke();
     }
+    // ultrahigh: grimy fine grain + rust speckle for a much griddier, wetter-
+    // looking wall/floor surface up close
+    if(s >= 4){
+      var fineCount = Math.round(speckleCount*1.2);
+      for(var k=0;k<fineCount;k++){
+        var fx = Math.random()*size, fy = Math.random()*size;
+        ctx.fillStyle = Math.random() < 0.5 ? 'rgba(10,14,10,0.3)' : 'rgba(120,90,60,0.2)';
+        ctx.fillRect(fx, fy, 0.7*s, 0.7*s);
+      }
+    }
+  }
+
+  var _sewerTexture = null;
+  function getSewerTexture(){
+    if(_sewerTexture) return _sewerTexture;
+    var size = Math.round(128 * textureScale());
+    var canvas = document.createElement('canvas');
+    canvas.width = size; canvas.height = size;
+    paintSewerTexture(canvas);
     var tex = new THREE.CanvasTexture(canvas);
     tex.wrapS = THREE.RepeatWrapping;
     tex.wrapT = THREE.RepeatWrapping;
+    registerLiveTexture(tex, function(t){
+      var newSize = Math.round(128 * textureScale());
+      if(t.image.width !== newSize){
+        t.image.width = newSize;
+        t.image.height = newSize;
+      }
+      paintSewerTexture(t.image);
+      t.needsUpdate = true;
+    });
     _sewerTexture = tex;
     return tex;
   }
@@ -4369,16 +4758,18 @@
   function renderWarzoneHud(){
     var myId = myWarzoneId();
 
-    // crosshair: tied purely to standing inside the arena boundary, not to
-    // matchLive — it should already be up while waiting for everyone else
-    // to walk in, and hidden again once you're dead (no point aiming a gun
-    // you can't fire while spectating)
+    // crosshair + viewmodel: gated on matchLive, not just standing inside
+    // the ring — a gun shouldn't appear just because you walked in early
+    // and are waiting on the rest of the roster to arrive; it should only
+    // show up once the match has actually started (everyone confirmed
+    // inside, startWarzoneMatch has run) and hide the instant you die
     var inArena = isInWarzoneArena(playerState.pos.x, playerState.pos.z);
     var amDead = WarzoneGame.matchLive && WarzoneGame.alive[myId] === false;
-    crosshairEl.classList.toggle('show', inArena && !amDead);
+    var amArmed = WarzoneGame.matchLive && inArena && !amDead;
+    crosshairEl.classList.toggle('show', amArmed);
     // the viewmodel pistol shares the crosshair's exact show condition —
     // if you can aim, you can see the gun you're aiming with
-    gunViewmodelEl.classList.toggle('show', inArena && !amDead);
+    gunViewmodelEl.classList.toggle('show', amArmed);
 
     var amAlive = WarzoneGame.matchLive && WarzoneGame.alive[myId] !== false;
     if(!amAlive){
@@ -4776,6 +5167,29 @@
       var r = remotePlayers[pid];
       if(r) { r.pos.x = WARZONE.arenaX; r.pos.z = WARZONE.arenaZ; }
     }
+
+    // host/solo-only: check whether that death just wiped the whole roster
+    // — same trigger shape as killZombie -> checkWaveCleared, just for the
+    // opposite team. Without this the match was staying "live" forever
+    // once everyone died: zombies kept existing (frozen, since they only
+    // chase living players and none were left), and matchLive/wave never
+    // reset, so the arena's own re-entry check could never fire again.
+    if(!Net.isMultiplayer() || Net.isHost()){
+      checkAllPlayersDead();
+    }
+  }
+
+  // Host/solo-only: if every player in the current roster is now dead,
+  // the match is lost — tears down the run the same way a wave-10 clear
+  // tears down a win (startWarzoneDefeat mirrors startWarzoneVictory).
+  function checkAllPlayersDead(){
+    if(!WarzoneGame.matchLive) return;
+    var ids = warzoneRosterIds();
+    if(ids.length === 0) return;
+    for(var i=0;i<ids.length;i++){
+      if(WarzoneGame.alive[ids[i]] !== false) return; // someone's still standing
+    }
+    startWarzoneDefeat();
   }
 
   // The local player's own death reaction: teleport to the spawn pad
@@ -5129,6 +5543,7 @@
                   WarzoneGame.wave = 0;
                   WarzoneGame.alive = {};
                   WarzoneGame.hp = {};
+                  WarzoneGame.kills = {};
                   WarzoneGame.finaleRunning = false;
                   if(warzoneBoundaryRing){
                     warzoneBoundaryRing.material.emissiveIntensity = 0.6; // back to its idle/not-live glow
@@ -5140,6 +5555,83 @@
         });
       }, 900);
     });
+  }
+
+  // Loss path: every player in the roster died before clearing wave 10.
+  // Host/solo-only decision (see checkAllPlayersDead), broadcast so every
+  // guest's screen ends the run the same way — mirrors
+  // startWarzoneVictory/runWarzoneVictoryLocally's broadcast-then-run-
+  // locally shape, just with no nuke and a "you lost" banner instead of
+  // a celebration. This is also what actually fixes two related bugs:
+  // without a reset here, matchLive/wave were never cleared once
+  // everyone died, so leftover zombies just froze in place forever
+  // (nothing left alive to chase) and the arena's own re-entry check in
+  // updateWarzoneAuthoritative could never fire again — walking back in
+  // did nothing because it only looks for matchLive===false && wave===0.
+  function startWarzoneDefeat(){
+    if(WarzoneGame.finaleRunning) return;
+    WarzoneGame.finaleRunning = true;
+
+    if(Net.isMultiplayer() && Net.isHost()){
+      Net.hostBroadcastEvent({ t:'event', payload:{ t:'warzoneDefeat' } });
+    }
+    runWarzoneDefeatLocally();
+  }
+
+  // Runs on every machine (host/solo directly, guests via the relayed
+  // 'warzoneDefeat' event). Deliberately shorter/quieter than the victory
+  // cutscene — no camera-to-sky flight, no nuke — just a banner, a short
+  // fade, and the same full state reset the victory path does, so the
+  // arena is immediately ready to be walked back into for another run.
+  function runWarzoneDefeatLocally(){
+    controlsLocked = true;
+    resetJoy();
+    lookActive = false;
+    crosshairEl.classList.remove('show');
+    gunViewmodelEl.classList.remove('show');
+
+    var myKills = WarzoneGame.kills[myWarzoneId()] || 0;
+    hillBannerEl.textContent = 'ВСЕ ПОГИБЛИ 💀\nВОЛНА ' + (WarzoneGame.wave || 1) + '\nТвои убийства: ' + myKills;
+    hillBannerEl.classList.add('show');
+
+    setTimeout(function(){
+      screenFadeEl.classList.add('show');
+      setTimeout(function(){
+        teleportPlayerToSpawn();
+
+        setTimeout(function(){
+          screenFadeEl.classList.remove('show');
+
+          setTimeout(function(){
+            hillBannerEl.classList.remove('show');
+            controlsLocked = false;
+
+            // full reset, identical in shape to the victory path's reset —
+            // clears any frozen zombies/pickups and drops matchLive/wave
+            // back to their pre-start values so updateWarzoneAuthoritative's
+            // "everyone just walked in" check can fire again
+            for(var zi=0;zi<zombies.length;zi++){
+              if(zombies[zi].mesh) scene.remove(zombies[zi].mesh);
+            }
+            zombies.length = 0;
+            for(var pki=0;pki<healthPickups.length;pki++){
+              if(healthPickups[pki].mesh) scene.remove(healthPickups[pki].mesh);
+            }
+            healthPickups.length = 0;
+            healthPickupSpawnTimer = 0;
+            WarzoneGame.matchLive = false;
+            WarzoneGame.wave = 0;
+            WarzoneGame.alive = {};
+            WarzoneGame.hp = {};
+            WarzoneGame.kills = {};
+            WarzoneGame.finaleRunning = false;
+            if(warzoneBoundaryRing){
+              warzoneBoundaryRing.material.emissiveIntensity = 0.6; // back to its idle/not-live glow
+            }
+          }, 500);
+        }, 700);
+      }, 700);
+    }, 600);
   }
 
   // Brief on-screen wave announcement, reusing the game's existing
@@ -6649,6 +7141,12 @@
       Net.state.onRemoteEvent = function(evt){
         if(evt.t === 'leave'){
           removeRemoteAvatar(evt.id);
+          // a disconnect can leave nobody alive in an active Warzone run
+          // (e.g. the last living player rage-quits) — same stuck-match
+          // risk as a normal death, so it gets the same authoritative
+          // check. Safe to call unconditionally: checkAllPlayersDead
+          // already no-ops unless a match is actually live.
+          checkAllPlayersDead();
           return;
         }
         if(evt.t === 'event'){
@@ -6847,6 +7345,10 @@
       // host has confirmed wave 10 is cleared — every guest plays the same
       // scripted victory cutscene locally (camera to sky, nuke, fade home)
       if(!isHost) runWarzoneVictoryLocally();
+    } else if(payload.t === 'warzoneDefeat'){
+      // host has confirmed the whole roster died — every guest plays the
+      // same short defeat cutscene locally (banner, fade home, full reset)
+      if(!isHost) runWarzoneDefeatLocally();
     } else if(payload.t === 'healthPickupSpawn'){
       // host spawned a new pickup at a specific array index — guests create
       // their own mesh at that same index so a later 'collected' event
@@ -9057,6 +9559,7 @@
     updateCamera(dt);
     updateCoordsDisplay();
     updateFarProps(dt);
+    updateClouds(dt);
 
     // dummy ragdoll physics only runs where it's authoritative: solo play
     // or the host. Guests just render whatever the host's snapshot says.
